@@ -49,7 +49,11 @@ const ToggleSwitch: React.FC<{ value: boolean; onToggle: () => void }> = ({ valu
   );
 };
 
-export const SettingsView: React.FC = () => {
+interface SettingsViewProps {
+  onNavigate?: (page: 'user-agreement' | 'privacy-policy' | 'child-protection' | 'tutorial') => void;
+}
+
+export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigate }) => {
   // Hook顺序很重要！useContext hooks必须在最前面
   const insets = useSafeAreaInsets();
   const { settings, updateSettings, logs, clearLogs } = useApp();
@@ -290,7 +294,10 @@ export const SettingsView: React.FC = () => {
 
         {/* Legal Links */}
         <View style={styles.legalSection}>
-          <TouchableOpacity activeOpacity={0.7}>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() => onNavigate?.('user-agreement')}
+          >
             <View style={styles.legalItem}>
               <Text style={styles.legalText}>用户协议</Text>
               <Icon name="chevron-right" size={18} color="#64748b" />
@@ -299,7 +306,10 @@ export const SettingsView: React.FC = () => {
 
           <View style={styles.legalDivider} />
 
-          <TouchableOpacity activeOpacity={0.7}>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() => onNavigate?.('privacy-policy')}
+          >
             <View style={styles.legalItem}>
               <Text style={styles.legalText}>隐私政策</Text>
               <Icon name="chevron-right" size={18} color="#64748b" />
@@ -308,9 +318,24 @@ export const SettingsView: React.FC = () => {
 
           <View style={styles.legalDivider} />
 
-          <TouchableOpacity activeOpacity={0.7}>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() => onNavigate?.('child-protection')}
+          >
             <View style={styles.legalItem}>
               <Text style={styles.legalText}>儿童个人信息保护规则</Text>
+              <Icon name="chevron-right" size={18} color="#64748b" />
+            </View>
+          </TouchableOpacity>
+
+          <View style={styles.legalDivider} />
+
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() => onNavigate?.('tutorial')}
+          >
+            <View style={styles.legalItem}>
+              <Text style={styles.legalText}>使用教程</Text>
               <Icon name="chevron-right" size={18} color="#64748b" />
             </View>
           </TouchableOpacity>

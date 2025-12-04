@@ -88,6 +88,14 @@ export const HomeView: React.FC = () => {
       ]}
       showsVerticalScrollIndicator={false}
     >
+      {/* Demo Data Disclaimer Banner */}
+      <View style={styles.demoBanner}>
+        <Icon name="info" size={16} color="#06b6d4" />
+        <Text style={styles.demoText}>
+          本应用为网络安全教育工具，数据为演示示例
+        </Text>
+      </View>
+
       {/* Status Card */}
       <View style={styles.statusCard}>
         <View style={[
@@ -267,6 +275,23 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: getPagePadding(),
     // paddingTop 在 contentContainerStyle 中动态设置（包含安全区域）
+  },
+  demoBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(6, 182, 212, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(6, 182, 212, 0.3)',
+    borderRadius: responsive.borderRadius.lg,
+    padding: responsive.spacing.md,
+    marginBottom: responsive.spacing.lg,
+  },
+  demoText: {
+    flex: 1,
+    fontSize: responsive.fontSize.xs,
+    color: '#06b6d4',
+    marginLeft: responsive.spacing.sm,
+    lineHeight: responsive.fontSize.xs * 1.4,
   },
   statusCard: {
     flexDirection: 'row',
