@@ -14,7 +14,7 @@ class DNSVPNModule: RCTEventEmitter {
 
     private var vpnManager: NETunnelProviderManager?
     private var hasListeners = false
-    private let appGroupIdentifier = "group.org.reactjs.native.example.iDNS"
+    private let appGroupIdentifier = "group.com.idns.wnlluo"
 
     // MARK: - Initialization
 
@@ -263,7 +263,7 @@ class DNSVPNModule: RCTEventEmitter {
         manager.localizedDescription = "iDNS Family Protection"
 
         let providerProtocol = NETunnelProviderProtocol()
-        providerProtocol.providerBundleIdentifier = "org.reactjs.native.example.iDNS.DNSPacketTunnelProvider"
+        providerProtocol.providerBundleIdentifier = "com.idns.wnlluo.DNSPacketTunnelProvider"
         providerProtocol.serverAddress = "iDNS VPN"
         providerProtocol.providerConfiguration = [
             "dnsServer": "https://i-dns.wnluo.com/dns-query" // I-DNS DoH
@@ -413,7 +413,7 @@ class DNSVPNModule: RCTEventEmitter {
         }
 
         sharedDefaults.set(blacklist, forKey: "blacklist")
-        sharedDefaults.synchronize()
+        // Note: synchronize() is deprecated in iOS 12+. UserDefaults auto-saves.
     }
 
     private func updateSharedWhitelist(add addDomain: String? = nil, remove removeDomain: String? = nil) {
@@ -430,6 +430,6 @@ class DNSVPNModule: RCTEventEmitter {
         }
 
         sharedDefaults.set(whitelist, forKey: "whitelist")
-        sharedDefaults.synchronize()
+        // Note: synchronize() is deprecated in iOS 12+. UserDefaults auto-saves.
     }
 }

@@ -8,7 +8,7 @@
 	</array>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.org.reactjs.native.example.iDNS</string>
+		<string>group.com.idns.wnlluo</string>
 	</array>
 </dict>
 </plist>

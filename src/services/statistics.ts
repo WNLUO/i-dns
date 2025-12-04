@@ -12,12 +12,19 @@ export const calculateStatistics = (logs: DnsLog[]): Statistics => {
   const totalLatency = logs.reduce((sum, log) => sum + log.latency, 0);
   const averageLatency = totalRequests > 0 ? totalLatency / totalRequests : 0;
 
-  // 按类别统计
+  // 按类别统计 - 注意：category字段现在存储IP地址或状态文本
+  // "已拦截" | "解析失败" | "无记录" | "域名不存在" | IP地址
+  const blocked = logs.filter(log => log.status === 'blocked');
+  const allowed = logs.filter(log => log.status === 'allowed');
+  const failed = logs.filter(log =>
+    log.category === '解析失败' || log.category === '无记录' || log.category === '域名不存在'
+  );
+
   const categoryStats = {
-    tracker: logs.filter(log => log.category === 'tracker').length,
-    ad: logs.filter(log => log.category === 'ad').length,
-    content: logs.filter(log => log.category === 'content').length,
-    unknown: logs.filter(log => log.category === 'unknown').length,
+    tracker: 0, // 保留字段以保持兼容性，但当前未实现域名分类
+    ad: 0,
+    content: 0,
+    unknown: blocked.length, // 将所有拦截的域名归类为"未知"
   };
 
   // 生成图表数据
@@ -100,20 +107,23 @@ export const getStatisticsForRange = (
 };
 
 // 获取拦截分类统计（用于StatsView的分类展示）
+// 注意：当前版本未实现域名分类功能，category字段存储的是IP地址或状态文本
 export const getCategoryBreakdown = (logs: DnsLog[]) => {
   const blockedLogs = logs.filter(log => log.status === 'blocked');
   const total = blockedLogs.length;
 
-  const trackerCount = blockedLogs.filter(
-    log => log.category === 'tracker',
-  ).length;
-  const adCount = blockedLogs.filter(log => log.category === 'ad').length;
-  const contentCount = blockedLogs.filter(
-    log => log.category === 'content',
-  ).length;
-  const unknownCount = blockedLogs.filter(
-    log => log.category === 'unknown',
-  ).length;
+  // 基于category字段的值进行简单分类
+  const dnsBlocked = blockedLogs.filter(
+    log => log.category === '已拦截',
+  ).length; // VPN本地拦截
+  const serverBlocked = blockedLogs.filter(
+    log => log.category === '0.0.0.0' || log.category === '::' || log.category === '::0',
+  ).length; // DoH服务器拦截
+
+  const trackerCount = 0; // 未实现
+  const adCount = 0; // 未实现
+  const contentCount = 0; // 未实现
+  const unknownCount = total; // 所有拦截的域名
 
   return [
     {
@@ -135,7 +145,7 @@ export const getCategoryBreakdown = (logs: DnsLog[]) => {
       color: '#8b5cf6', // purple
     },
     {
-      name: '其他',
+      name: '已拦截',
       count: unknownCount,
       percentage: total > 0 ? (unknownCount / total) * 100 : 0,
       color: '#64748b', // slate

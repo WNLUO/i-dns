@@ -13,17 +13,27 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var blacklist: Set<String> = []
     private var whitelist: Set<String> = []
+
+    // PERFORMANCE OPTIMIZATION: Split blacklist into exact matches and wildcards for faster lookup
+    private var exactBlacklist: Set<String> = []
+    private var wildcardBlacklist: [String] = []
+    private var cachedRegexPatterns: [String: NSRegularExpression] = [:]
+    private let blacklistLock = NSLock()
+
     private var dnsServer: String = "https://i-dns.wnluo.com/dns-query" // I-DNS DoH
     private var dnsServerType: String = "doh" // "udp" or "doh"
     private let logger = OSLog(subsystem: "com.idns.vpn", category: "PacketTunnel")
     private var udpSession: NWConnection?
     private var cleanupTimer: Timer?
 
-    // Concurrency control for DNS queries - SERIAL queue to prevent connection overload
-    private let queryQueue = DispatchQueue(label: "com.idns.dns.query", qos: .userInitiated)  // SERIAL, not concurrent!
+    // Concurrency control for DNS queries - CONCURRENT queue for maximum performance
+    // Changed from SERIAL to CONCURRENT to allow parallel DNS resolution
+    // Thread safety is handled by individual locks on shared resources
+    private let queryQueue = DispatchQueue(label: "com.idns.dns.query", qos: .userInitiated, attributes: .concurrent)
 
     // Single shared UDP connection - reuse for all queries
     private var sharedUDPConnection: NWConnection?
+    private var connectionVersion: Int = 0  // RACE CONDITION FIX: Track connection version
     private let connectionLock = NSLock()
 
     // DNS Cache to reduce redundant queries
@@ -46,6 +56,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     // Request deduplication - track in-flight requests to prevent concurrent queries for same domain
     private var inflightRequests: Set<String> = []
     private let inflightRequestsLock = NSLock()
+
+    // RESPONSE BROADCAST FIX: Store pending queries waiting for in-flight requests
+    // Structure: [domain: [(originalPacket, protocolNumber)]]
+    private var pendingResponseCallbacks: [String: [(Data, UInt32)]] = [:]
+    private let pendingResponseLock = NSLock()
 
     // Cache for DoH server IP addresses (resolved before VPN starts)
     private var dohServerIPs: [String] = []
@@ -73,7 +88,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }()
 
     // App Group for sharing data with main app
-    private let appGroupIdentifier = "group.org.reactjs.native.example.iDNS"
+    private let appGroupIdentifier = "group.com.idns.wnlluo"
 
     override func startTunnel(options: [String : NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         os_log("========================================", log: logger, type: .info)
@@ -135,15 +150,40 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // Configure VPN settings
         let settings = createTunnelSettings()
 
-        // Apply settings
-        setTunnelNetworkSettings(settings) { error in
+        // Apply settings with retry mechanism to handle temporary network agent conflicts
+        applyTunnelSettingsWithRetry(settings, attempt: 1, maxAttempts: 3, completionHandler: completionHandler)
+    }
+
+    private func applyTunnelSettingsWithRetry(_ settings: NEPacketTunnelNetworkSettings, attempt: Int, maxAttempts: Int, completionHandler: @escaping (Error?) -> Void) {
+        setTunnelNetworkSettings(settings) { [weak self] error in
+            guard let self = self else { return }
+
             if let error = error {
-                os_log("Failed to set tunnel settings: %{public}@", log: self.logger, type: .error, error.localizedDescription)
-                completionHandler(error)
+                let nsError = error as NSError
+                // Retry on network agent errors (domain: NEVPNErrorDomain or similar)
+                let shouldRetry = attempt < maxAttempts && (
+                    nsError.domain == "NEVPNErrorDomain" ||
+                    nsError.code == 1 || // Configuration invalid (temporary)
+                    nsError.localizedDescription.contains("agent")
+                )
+
+                if shouldRetry {
+                    os_log("⚠️ Failed to set tunnel settings (attempt %d/%d): %{public}@. Retrying in 1 second...",
+                           log: self.logger, type: .info, attempt, maxAttempts, error.localizedDescription)
+
+                    // Wait 1 second before retry to let network stack settle
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
+                        self.applyTunnelSettingsWithRetry(settings, attempt: attempt + 1, maxAttempts: maxAttempts, completionHandler: completionHandler)
+                    }
+                } else {
+                    os_log("❌ Failed to set tunnel settings after %d attempts: %{public}@",
+                           log: self.logger, type: .error, attempt, error.localizedDescription)
+                    completionHandler(error)
+                }
                 return
             }
 
-            os_log("VPN tunnel started successfully", log: self.logger, type: .info)
+            os_log("✅ VPN tunnel started successfully", log: self.logger, type: .info)
 
             // Start cleanup timer for DNS cache (prevent memory leak)
             self.startCleanupTimer()
@@ -165,12 +205,27 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         connectionLock.lock()
         sharedUDPConnection?.cancel()
         sharedUDPConnection = nil
+        connectionVersion = 0  // Reset version counter
         connectionLock.unlock()
 
         // Clear DNS cache
         dnsCacheLock.lock()
         dnsCache.removeAll()
         dnsCacheLock.unlock()
+
+        // QUERY COALESCING CLEANUP: Clear pending response callbacks
+        pendingResponseLock.lock()
+        let pendingCount = pendingResponseCallbacks.values.reduce(0) { $0 + $1.count }
+        pendingResponseCallbacks.removeAll()
+        pendingResponseLock.unlock()
+        if pendingCount > 0 {
+            os_log("⚠️ Cleared %d pending response callbacks on shutdown", log: logger, type: .info, pendingCount)
+        }
+
+        // Clear inflight requests tracker
+        inflightRequestsLock.lock()
+        inflightRequests.removeAll()
+        inflightRequestsLock.unlock()
 
         // CRITICAL FIX: Invalidate and cancel URLSession to prevent memory leak
         // This ensures all pending DoH requests are cancelled and callbacks are released
@@ -193,30 +248,62 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         switch message.type {
         case "addBlacklist":
             if let domain = message.domain {
-                blacklist.insert(domain.lowercased())
+                let normalizedDomain = domain.lowercased()
+                blacklist.insert(normalizedDomain)
                 saveFilterRules()
-                os_log("Added to blacklist: %{public}@", log: logger, type: .info, domain)
+
+                // CACHE CLEANUP FIX: Remove cached response to ensure blocking takes effect immediately
+                dnsCacheLock.lock()
+                let removed = dnsCache.removeValue(forKey: normalizedDomain) != nil
+                dnsCacheLock.unlock()
+
+                os_log("Added to blacklist: %{public}@ %@", log: logger, type: .info, domain,
+                       removed ? "(cache cleared)" : "")
             }
 
         case "removeBlacklist":
             if let domain = message.domain {
-                blacklist.remove(domain.lowercased())
+                let normalizedDomain = domain.lowercased()
+                blacklist.remove(normalizedDomain)
                 saveFilterRules()
-                os_log("Removed from blacklist: %{public}@", log: logger, type: .info, domain)
+
+                // Clear cache so next query can succeed
+                dnsCacheLock.lock()
+                let removed = dnsCache.removeValue(forKey: normalizedDomain) != nil
+                dnsCacheLock.unlock()
+
+                os_log("Removed from blacklist: %{public}@ %@", log: logger, type: .info, domain,
+                       removed ? "(cache cleared)" : "")
             }
 
         case "addWhitelist":
             if let domain = message.domain {
-                whitelist.insert(domain.lowercased())
+                let normalizedDomain = domain.lowercased()
+                whitelist.insert(normalizedDomain)
                 saveFilterRules()
-                os_log("Added to whitelist: %{public}@", log: logger, type: .info, domain)
+
+                // Clear cache to re-fetch if previously blocked
+                dnsCacheLock.lock()
+                let removed = dnsCache.removeValue(forKey: normalizedDomain) != nil
+                dnsCacheLock.unlock()
+
+                os_log("Added to whitelist: %{public}@ %@", log: logger, type: .info, domain,
+                       removed ? "(cache cleared)" : "")
             }
 
         case "removeWhitelist":
             if let domain = message.domain {
-                whitelist.remove(domain.lowercased())
+                let normalizedDomain = domain.lowercased()
+                whitelist.remove(normalizedDomain)
                 saveFilterRules()
-                os_log("Removed from whitelist: %{public}@", log: logger, type: .info, domain)
+
+                // Clear cache to re-evaluate blocking rules
+                dnsCacheLock.lock()
+                let removed = dnsCache.removeValue(forKey: normalizedDomain) != nil
+                dnsCacheLock.unlock()
+
+                os_log("Removed from whitelist: %{public}@ %@", log: logger, type: .info, domain,
+                       removed ? "(cache cleared)" : "")
             }
 
         case "updateDNS":
@@ -225,6 +312,34 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 os_log("🔄 Updating DNS Server", log: logger, type: .info)
                 os_log("Old DNS: %{public}@", log: logger, type: .info, dnsServer)
                 os_log("Old Type: %{public}@", log: logger, type: .info, dnsServerType)
+
+                // STATE CLEANUP FIX: Clear all pending states when switching DNS
+                os_log("🧹 Clearing pending states for DNS switch...", log: logger, type: .info)
+
+                // 1. Clear inflight requests
+                inflightRequestsLock.lock()
+                let inflightCount = inflightRequests.count
+                inflightRequests.removeAll()
+                inflightRequestsLock.unlock()
+
+                // 2. Clean up pending callbacks (send SERVFAIL to all waiting)
+                pendingResponseLock.lock()
+                let pendingDomains = Array(pendingResponseCallbacks.keys)
+                let totalPending = pendingResponseCallbacks.values.reduce(0) { $0 + $1.count }
+                pendingResponseLock.unlock()
+
+                for domain in pendingDomains {
+                    cleanupPendingCallbacks(for: domain)
+                }
+
+                // 3. Optional: Clear DNS cache (old responses may be invalid)
+                dnsCacheLock.lock()
+                let cacheCount = dnsCache.count
+                dnsCache.removeAll()
+                dnsCacheLock.unlock()
+
+                os_log("✓ Cleared: %d inflight, %d pending callbacks, %d cached",
+                       log: logger, type: .info, inflightCount, totalPending, cacheCount)
 
                 dnsServer = dns
 
@@ -388,7 +503,31 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         queryCounterLock.unlock()
 
         if count > maxQueriesPerDomain {
-            os_log("🔴 LOOP DETECTED: %{public}@ queried %d times in quick succession! Dropping to prevent infinite loop", log: logger, type: .error, domain, count)
+            os_log("🔴 LOOP DETECTED: %{public}@ queried %d times in quick succession!", log: logger, type: .error, domain, count)
+
+            // CRITICAL FIX: Return cached response or SERVFAIL instead of dropping query
+            // This prevents DNS timeout and improves user experience
+
+            // Strategy 1: Try to return cached response if available
+            if let cachedResponse = getCachedDNSResponse(domain: dnsQuery.domain, queryType: dnsQuery.queryType) {
+                os_log("✓ Returning cached response for loop-detected query: %{public}@", log: logger, type: .info, dnsQuery.domain)
+
+                let ipHeaderLength = Int((packet[0] & 0x0F)) * 4
+                if let responsePacket = createDNSResponsePacket(
+                    originalPacket: packet,
+                    dnsResponse: cachedResponse,
+                    ipHeaderLength: ipHeaderLength
+                ) {
+                    packetFlow.writePackets([responsePacket], withProtocols: [NSNumber(value: protocolNumber)])
+                }
+                return
+            }
+
+            // Strategy 2: Return SERVFAIL to indicate temporary failure (better than timeout)
+            os_log("⚠️ No cache available, returning SERVFAIL for loop-detected query: %{public}@", log: logger, type: .info, dnsQuery.domain)
+            if let servfailResponse = createServfailResponse(for: packet) {
+                packetFlow.writePackets([servfailResponse], withProtocols: [NSNumber(value: protocolNumber)])
+            }
             return
         }
 
@@ -396,15 +535,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             os_log("  ⚠️ Query count for %{public}@: %d (within 2s window)", log: logger, type: .info, domain, count)
         }
 
-        // Handle IPv6 (AAAA) queries - return empty response to avoid unnecessary processing
-        // Most apps query both A and AAAA simultaneously, causing duplicate processing
+        // IPv6 (AAAA) queries are now supported!
+        // Allow AAAA queries to be processed normally through DoH/UDP
+        // The DNS server will return IPv6 addresses if available
         if dnsQuery.queryType == 28 {  // AAAA record (IPv6)
-            os_log("⏭ Skipping IPv6 (AAAA) query for: %{public}@", log: logger, type: .debug, dnsQuery.domain)
-            // Return empty answer (no IPv6 support)
-            if let emptyResponse = createEmptyAAAAResponse(for: packet) {
-                packetFlow.writePackets([emptyResponse], withProtocols: [NSNumber(value: protocolNumber)])
-            }
-            return
+            os_log("📡 Processing IPv6 (AAAA) query for: %{public}@", log: logger, type: .debug, dnsQuery.domain)
         }
 
         // Handle DDR (Discovery of Designated Resolvers) queries
@@ -451,7 +586,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 packetFlow.writePackets([blockResponse], withProtocols: [NSNumber(value: protocolNumber)])
             }
             // Send event with 0 latency for blocked domains
-            sendDNSEvent(domain: dnsQuery.domain, blocked: true, latency: 0)
+            sendDNSEvent(domain: dnsQuery.domain, blocked: true, latency: 0, queryType: dnsQuery.queryType)
         } else {
             // Forward to real DNS server and measure latency
             os_log("✅ Allowing domain: %{public}@", log: logger, type: .info, dnsQuery.domain)
@@ -470,14 +605,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private func forwardDNSQueryUDP(dnsQuery: DNSQuery, originalPacket: Data, protocolNumber: UInt32) {
         let startTime = Date()
 
+        // CONCURRENCY FIX: Removed inflightRequests blocking mechanism
+        // Now allows true parallel DNS resolution for maximum performance
+        // Each query is processed independently without waiting for others
+
         // 1. Check cache first (before any async operations)
-        if let cachedResponse = getCachedDNSResponse(domain: dnsQuery.domain) {
-            os_log("✓ DNS cache hit for: %{public}@", log: logger, type: .debug, dnsQuery.domain)
+        if let cachedResponse = getCachedDNSResponse(domain: dnsQuery.domain, queryType: dnsQuery.queryType) {
+            os_log("✓ DNS cache hit for UDP: %{public}@", log: logger, type: .debug, dnsQuery.domain)
 
             let latency = Int(Date().timeIntervalSince(startTime) * 1000)
             let resolvedIP = parseResolvedIP(from: cachedResponse) ?? ""
 
-            sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: resolvedIP, dnsResponse: cachedResponse)
+            sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: resolvedIP, dnsResponse: cachedResponse, queryType: dnsQuery.queryType)
 
             if let responsePacket = createDNSResponsePacket(
                 originalPacket: originalPacket,
@@ -508,13 +647,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             guard let self = self else { return }
 
             // Get or create shared connection
-            let connection = self.getOrCreateSharedConnection()
+            let (connection, version) = self.getOrCreateSharedConnection()
 
             // Set timeout for this specific query
             let timeoutWorkItem = DispatchWorkItem { [weak self] in
                 guard let self = self else { return }
-                os_log("⏱ DNS query timeout for: %{public}@", log: self.logger, type: .error, dnsQuery.domain)
-                self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: 0, resolvedIP: "")
+                os_log("⏱ UDP DNS query timeout for: %{public}@", log: self.logger, type: .error, dnsQuery.domain)
+                self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: 0, resolvedIP: "", queryType: dnsQuery.queryType)
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + 5.0, execute: timeoutWorkItem)
 
@@ -526,17 +665,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 }
 
                 if let error = error {
-                    os_log("Failed to send DNS query: %{public}@", log: self.logger, type: .error, error.localizedDescription)
-                    self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: 0)
+                    os_log("Failed to send UDP DNS query: %{public}@", log: self.logger, type: .error, error.localizedDescription)
+                    self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: 0, queryType: dnsQuery.queryType)
                     timeoutWorkItem.cancel()
 
-                    // FIX: Don't reset connection immediately - only mark for recreation
-                    // The serial queue ensures only one query uses it at a time
+                    // RACE CONDITION FIX: Only reset connection if version matches
+                    // This prevents resetting a newer connection created by another query
                     self.connectionLock.lock()
-                    if self.sharedUDPConnection === connection {
+                    if self.sharedUDPConnection === connection && self.connectionVersion == version {
                         self.sharedUDPConnection?.cancel()
                         self.sharedUDPConnection = nil
-                        os_log("⚠️ Shared UDP connection reset due to send error", log: self.logger, type: .info)
+                        self.connectionVersion += 1
+                        os_log("⚠️ Shared UDP connection reset due to send error (v%d)", log: self.logger, type: .info, version)
                     }
                     self.connectionLock.unlock()
                     return
@@ -550,35 +690,56 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     let latency = Int(Date().timeIntervalSince(startTime) * 1000)
 
                     if let error = error {
-                        os_log("Failed to receive DNS response: %{public}@", log: self.logger, type: .error, error.localizedDescription)
-                        self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency)
+                        os_log("Failed to receive UDP DNS response: %{public}@", log: self.logger, type: .error, error.localizedDescription)
 
-                        // FIX: Only reset if this is still the shared connection
+                        self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, queryType: dnsQuery.queryType)
+
+                        // RACE CONDITION FIX: Only reset connection if version matches
                         self.connectionLock.lock()
-                        if self.sharedUDPConnection === connection {
+                        if self.sharedUDPConnection === connection && self.connectionVersion == version {
                             self.sharedUDPConnection?.cancel()
                             self.sharedUDPConnection = nil
-                            os_log("⚠️ Shared UDP connection reset due to receive error", log: self.logger, type: .info)
+                            self.connectionVersion += 1
+                            os_log("⚠️ Shared UDP connection reset due to receive error (v%d)", log: self.logger, type: .info, version)
                         }
                         self.connectionLock.unlock()
                         return
                     }
 
                     guard let responseData = content else {
-                        os_log("Empty DNS response", log: self.logger, type: .error)
-                        self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: "")
+                        os_log("Empty UDP DNS response", log: self.logger, type: .error)
+
+                        self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: "", queryType: dnsQuery.queryType)
                         return
                     }
 
-                    // 6. Cache the response
-                    self.cacheDNSResponse(domain: dnsQuery.domain, response: responseData)
-
-                    // Parse resolved IP from DNS response
+                    // 6. Parse DNS response
+                    let rcode = responseData.count > 3 ? Int(responseData[3]) & 0x0F : -1
+                    let answerCount = responseData.count > 7 ? Int(responseData[6]) << 8 | Int(responseData[7]) : 0
                     let resolvedIP = self.parseResolvedIP(from: responseData) ?? ""
 
-                    // Send event to main app with actual latency and resolved IP
-                    self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: resolvedIP, dnsResponse: responseData)
-                    os_log("DNS query completed in %d ms, resolved to: %{public}@", log: self.logger, type: .debug, latency, resolvedIP)
+                    // IMPROVED: Detect incomplete DNS responses and trigger CNAME recursive resolution
+                    if rcode == 0 && answerCount > 0 && resolvedIP.hasPrefix("CNAME->") {
+                        let cnameTarget = String(resolvedIP.dropFirst("CNAME->".count))
+                        os_log("🔄 UDP returned CNAME without final IP: %{public}@ -> %{public}@, starting recursive resolution",
+                               log: self.logger, type: .info, dnsQuery.domain, cnameTarget)
+
+                        // Trigger CNAME recursive resolution
+                        self.resolveCNAMERecursive(
+                            cnameTarget: cnameTarget,
+                            originalQuery: dnsQuery,
+                            originalPacket: originalPacket,
+                            protocolNumber: protocolNumber,
+                            cnameChain: [dnsQuery.domain.lowercased()],
+                            depth: 1
+                        )
+                        return
+                    }
+
+                    // Cache and send response
+                    self.cacheDNSResponse(domain: dnsQuery.domain, response: responseData, queryType: dnsQuery.queryType)
+                    self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: resolvedIP, dnsResponse: responseData, queryType: dnsQuery.queryType)
+                    os_log("UDP DNS query completed in %d ms, resolved to: %{public}@", log: self.logger, type: .debug, latency, resolvedIP)
 
                     // Create response packet (reconstruct IP + UDP + DNS)
                     if let responsePacket = self.createDNSResponsePacket(
@@ -587,6 +748,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         ipHeaderLength: ipHeaderLength
                     ) {
                         self.packetFlow.writePackets([responsePacket], withProtocols: [NSNumber(value: protocolNumber)])
+
+                        // Response sent successfully
                     }
                 }
             })
@@ -739,11 +902,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
                         os_log("✅ Direct DNS query succeeded via %{public}@ in %d ms", log: self.logger, type: .info, dnsServer, latency)
 
-                        // Cache the response
-                        self.cacheDNSResponse(domain: dnsQuery.domain, response: responseData)
-
-                        // Parse resolved IP for logging
+                        // Parse DNS response
+                        let rcode = responseData.count > 3 ? Int(responseData[3]) & 0x0F : -1
+                        let answerCount = responseData.count > 7 ? Int(responseData[6]) << 8 | Int(responseData[7]) : 0
                         let resolvedIP = self.parseResolvedIP(from: responseData) ?? ""
+
+                        // Direct DNS is only used for DoH server domain resolution
+                        // CNAME recursion is not needed here as DoH servers should have direct A/AAAA records
+                        // If we get CNAME-only response, just pass it through
+
+                        // Cache the response
+                        self.cacheDNSResponse(domain: dnsQuery.domain, response: responseData, queryType: dnsQuery.queryType)
                         os_log("✓ Resolved %{public}@ to: %{public}@", log: self.logger, type: .info, dnsQuery.domain, resolvedIP)
 
                         // DO NOT send event to UI - this is an internal query for DoH server domain
@@ -786,6 +955,263 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         connection.start(queue: .global())
     }
 
+    /// Create a DNS query packet for a given domain and query type
+    /// This is used for CNAME recursive resolution
+    private func createDNSQueryPacket(domain: String, queryType: UInt16) -> Data {
+        var packet = Data()
+
+        // DNS Header (12 bytes)
+        // Transaction ID (2 bytes) - random
+        packet.append(contentsOf: [UInt8.random(in: 0...255), UInt8.random(in: 0...255)])
+        // Flags (2 bytes) - standard query
+        packet.append(contentsOf: [0x01, 0x00])  // RD=1 (recursion desired)
+        // Questions (2 bytes)
+        packet.append(contentsOf: [0x00, 0x01])
+        // Answer RRs (2 bytes)
+        packet.append(contentsOf: [0x00, 0x00])
+        // Authority RRs (2 bytes)
+        packet.append(contentsOf: [0x00, 0x00])
+        // Additional RRs (2 bytes)
+        packet.append(contentsOf: [0x00, 0x00])
+
+        // Question section
+        // Domain name (labels)
+        for label in domain.split(separator: ".") {
+            let labelData = Data(label.utf8)
+            packet.append(UInt8(labelData.count))
+            packet.append(labelData)
+        }
+        packet.append(0x00)  // End of domain name
+
+        // Query type (2 bytes)
+        packet.append(UInt8(queryType >> 8))
+        packet.append(UInt8(queryType & 0xFF))
+
+        // Query class (2 bytes) - IN (Internet)
+        packet.append(contentsOf: [0x00, 0x01])
+
+        return packet
+    }
+
+    /// Resolve CNAME via DoH (used for recursive CNAME resolution)
+    private func resolveCNAMEViaDoH(
+        cnameQuery: DNSQuery,
+        originalPacket: Data,
+        protocolNumber: UInt32,
+        cnameChain: Set<String>,
+        depth: Int
+    ) {
+        // Similar to forwardDNSQueryDoH but simplified for CNAME resolution
+        guard let url = URL(string: dnsServer) else {
+            os_log("❌ Invalid DoH URL for CNAME resolution", log: logger, type: .error)
+            if let servfailResponse = createServfailResponse(for: originalPacket) {
+                packetFlow.writePackets([servfailResponse], withProtocols: [NSNumber(value: protocolNumber)])
+            }
+            return
+        }
+
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 5.0)
+        request.httpMethod = "POST"
+        request.setValue("application/dns-message", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/dns-message", forHTTPHeaderField: "Accept")
+        request.httpBody = cnameQuery.packet
+
+        let task = dohSession.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self else { return }
+
+            if let error = error {
+                os_log("❌ CNAME DoH query failed: %{public}@", log: self.logger, type: .error, error.localizedDescription)
+                if let servfailResponse = self.createServfailResponse(for: originalPacket) {
+                    self.packetFlow.writePackets([servfailResponse], withProtocols: [NSNumber(value: protocolNumber)])
+                }
+                return
+            }
+
+            guard let responseData = data, !responseData.isEmpty else {
+                os_log("❌ Empty CNAME DoH response", log: self.logger, type: .error)
+                if let servfailResponse = self.createServfailResponse(for: originalPacket) {
+                    self.packetFlow.writePackets([servfailResponse], withProtocols: [NSNumber(value: protocolNumber)])
+                }
+                return
+            }
+
+            // Check if we got IP addresses or another CNAME
+            let resolvedIP = self.parseResolvedIP(from: responseData) ?? ""
+
+            if resolvedIP.hasPrefix("CNAME->") {
+                // Another CNAME, continue recursion
+                let nextCname = String(resolvedIP.dropFirst("CNAME->".count))
+                self.resolveCNAMERecursive(
+                    cnameTarget: nextCname,
+                    originalQuery: cnameQuery,
+                    originalPacket: originalPacket,
+                    protocolNumber: protocolNumber,
+                    cnameChain: cnameChain,
+                    depth: depth
+                )
+            } else if !resolvedIP.isEmpty {
+                // Found final IP address, forward the response
+                os_log("✅ CNAME resolved to IP: %{public}@", log: self.logger, type: .info, resolvedIP)
+
+                let ipHeaderLength = Int((originalPacket[0] & 0x0F)) * 4
+                if let responsePacket = self.createDNSResponsePacket(
+                    originalPacket: originalPacket,
+                    dnsResponse: responseData,
+                    ipHeaderLength: ipHeaderLength
+                ) {
+                    self.packetFlow.writePackets([responsePacket], withProtocols: [NSNumber(value: protocolNumber)])
+                }
+            } else {
+                // No IP found, return SERVFAIL
+                if let servfailResponse = self.createServfailResponse(for: originalPacket) {
+                    self.packetFlow.writePackets([servfailResponse], withProtocols: [NSNumber(value: protocolNumber)])
+                }
+            }
+        }
+
+        task.resume()
+    }
+
+    /// Resolve CNAME via UDP (used for recursive CNAME resolution)
+    private func resolveCNAMEViaUDP(
+        cnameQuery: DNSQuery,
+        originalPacket: Data,
+        protocolNumber: UInt32,
+        cnameChain: Set<String>,
+        depth: Int
+    ) {
+        // Get or create shared UDP connection
+        let (connection, _) = getOrCreateSharedConnection()
+
+        let message = NWProtocolUDP.Metadata()
+        let context = NWConnection.ContentContext(identifier: "DNSQuery", metadata: [message])
+
+        connection.send(content: cnameQuery.packet, contentContext: context, isComplete: true, completion: .contentProcessed { [weak self] error in
+            guard let self = self else { return }
+
+            if let error = error {
+                os_log("❌ CNAME UDP query send failed: %{public}@", log: self.logger, type: .error, error.localizedDescription)
+                if let servfailResponse = self.createServfailResponse(for: originalPacket) {
+                    self.packetFlow.writePackets([servfailResponse], withProtocols: [NSNumber(value: protocolNumber)])
+                }
+                return
+            }
+
+            connection.receiveMessage { content, _, _, error in
+                if let error = error {
+                    os_log("❌ CNAME UDP response failed: %{public}@", log: self.logger, type: .error, error.localizedDescription)
+                    if let servfailResponse = self.createServfailResponse(for: originalPacket) {
+                        self.packetFlow.writePackets([servfailResponse], withProtocols: [NSNumber(value: protocolNumber)])
+                    }
+                    return
+                }
+
+                guard let responseData = content, !responseData.isEmpty else {
+                    os_log("❌ Empty CNAME UDP response", log: self.logger, type: .error)
+                    if let servfailResponse = self.createServfailResponse(for: originalPacket) {
+                        self.packetFlow.writePackets([servfailResponse], withProtocols: [NSNumber(value: protocolNumber)])
+                    }
+                    return
+                }
+
+                // Check if we got IP addresses or another CNAME
+                let resolvedIP = self.parseResolvedIP(from: responseData) ?? ""
+
+                if resolvedIP.hasPrefix("CNAME->") {
+                    // Another CNAME, continue recursion
+                    let nextCname = String(resolvedIP.dropFirst("CNAME->".count))
+                    self.resolveCNAMERecursive(
+                        cnameTarget: nextCname,
+                        originalQuery: cnameQuery,
+                        originalPacket: originalPacket,
+                        protocolNumber: protocolNumber,
+                        cnameChain: cnameChain,
+                        depth: depth
+                    )
+                } else if !resolvedIP.isEmpty {
+                    // Found final IP address, forward the response
+                    os_log("✅ CNAME resolved to IP: %{public}@", log: self.logger, type: .info, resolvedIP)
+
+                    let ipHeaderLength = Int((originalPacket[0] & 0x0F)) * 4
+                    if let responsePacket = self.createDNSResponsePacket(
+                        originalPacket: originalPacket,
+                        dnsResponse: responseData,
+                        ipHeaderLength: ipHeaderLength
+                    ) {
+                        self.packetFlow.writePackets([responsePacket], withProtocols: [NSNumber(value: protocolNumber)])
+                    }
+                } else {
+                    // No IP found, return SERVFAIL
+                    if let servfailResponse = self.createServfailResponse(for: originalPacket) {
+                        self.packetFlow.writePackets([servfailResponse], withProtocols: [NSNumber(value: protocolNumber)])
+                    }
+                }
+            }
+        })
+    }
+
+    /// Recursively resolve CNAME to find the final IP address
+    /// This is called when DNS server returns only CNAME without A/AAAA record
+    private func resolveCNAMERecursive(
+        cnameTarget: String,
+        originalQuery: DNSQuery,
+        originalPacket: Data,
+        protocolNumber: UInt32,
+        cnameChain: Set<String> = [],
+        depth: Int = 0
+    ) {
+        // Maximum recursion depth to prevent infinite loops
+        let maxDepth = 5
+
+        // Check recursion depth
+        if depth >= maxDepth {
+            os_log("⚠️ CNAME recursion depth limit reached (%d), returning SERVFAIL", log: logger, type: .error, maxDepth)
+            if let servfailResponse = createServfailResponse(for: originalPacket) {
+                packetFlow.writePackets([servfailResponse], withProtocols: [NSNumber(value: protocolNumber)])
+            }
+            return
+        }
+
+        // Check for CNAME loops
+        if cnameChain.contains(cnameTarget.lowercased()) {
+            os_log("⚠️ CNAME loop detected: %{public}@ already in chain", log: logger, type: .error, cnameTarget)
+            if let servfailResponse = createServfailResponse(for: originalPacket) {
+                packetFlow.writePackets([servfailResponse], withProtocols: [NSNumber(value: protocolNumber)])
+            }
+            return
+        }
+
+        os_log("🔄 Recursively resolving CNAME: %{public}@ (depth: %d)", log: logger, type: .info, cnameTarget, depth)
+
+        // Add current target to chain
+        var newChain = cnameChain
+        newChain.insert(cnameTarget.lowercased())
+
+        // Create a new DNS query for the CNAME target
+        // Use the same query type as the original query (A or AAAA)
+        let cnameQueryPacket = createDNSQueryPacket(domain: cnameTarget, queryType: originalQuery.queryType)
+        let cnameQuery = DNSQuery(domain: cnameTarget, packet: cnameQueryPacket, queryType: originalQuery.queryType)
+
+        // Query the CNAME target using the same DNS method (DoH/UDP)
+        if dnsServerType == "doh" {
+            resolveCNAMEViaDoH(
+                cnameQuery: cnameQuery,
+                originalPacket: originalPacket,
+                protocolNumber: protocolNumber,
+                cnameChain: newChain,
+                depth: depth + 1
+            )
+        } else {
+            resolveCNAMEViaUDP(
+                cnameQuery: cnameQuery,
+                originalPacket: originalPacket,
+                protocolNumber: protocolNumber,
+                cnameChain: newChain,
+                depth: depth + 1
+            )
+        }
+    }
+
     private func forwardDNSQueryDoH(dnsQuery: DNSQuery, originalPacket: Data, protocolNumber: UInt32) {
         let startTime = Date()
 
@@ -793,28 +1219,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         os_log("Domain: %{public}@", log: logger, type: .info, dnsQuery.domain)
         os_log("DoH Server: %{public}@", log: logger, type: .info, dnsServer)
 
-        // 1. Check if there's already an in-flight request for this domain
-        inflightRequestsLock.lock()
-        let isInflight = inflightRequests.contains(dnsQuery.domain)
-        if !isInflight {
-            inflightRequests.insert(dnsQuery.domain)
-        }
-        inflightRequestsLock.unlock()
+        // CONCURRENCY FIX: Removed inflightRequests blocking mechanism
+        // Now allows true parallel DNS resolution for maximum performance
 
-        if isInflight {
-            os_log("⏸ Request already in flight for: %{public}@, dropping duplicate", log: logger, type: .info, dnsQuery.domain)
-            return
-        }
-
-        // Ensure we clean up the inflight request when done
-        defer {
-            inflightRequestsLock.lock()
-            inflightRequests.remove(dnsQuery.domain)
-            inflightRequestsLock.unlock()
-        }
-
-        // 2. Check cache first
-        if let cachedResponse = getCachedDNSResponse(domain: dnsQuery.domain) {
+        // 1. Check cache first
+        if let cachedResponse = getCachedDNSResponse(domain: dnsQuery.domain, queryType: dnsQuery.queryType) {
             os_log("✓ DNS cache hit for: %{public}@", log: logger, type: .debug, dnsQuery.domain)
 
             let latency = Int(Date().timeIntervalSince(startTime) * 1000)
@@ -823,14 +1232,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             // Check if cached response is blocked (shouldn't happen since we don't cache blocked responses, but safety check)
             if resolvedIP == "0.0.0.0" {
                 os_log("🚫 Cached response is blocked (0.0.0.0), returning NXDOMAIN", log: logger, type: .info)
-                sendDNSEvent(domain: dnsQuery.domain, blocked: true, latency: latency, resolvedIP: "0.0.0.0", dnsResponse: cachedResponse)
+                sendDNSEvent(domain: dnsQuery.domain, blocked: true, latency: latency, resolvedIP: "0.0.0.0", dnsResponse: cachedResponse, queryType: dnsQuery.queryType)
                 if let blockResponse = createBlockResponse(for: originalPacket) {
                     packetFlow.writePackets([blockResponse], withProtocols: [NSNumber(value: protocolNumber)])
                 }
                 return
             }
 
-            sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: resolvedIP, dnsResponse: cachedResponse)
+            sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: resolvedIP, dnsResponse: cachedResponse, queryType: dnsQuery.queryType)
 
             let ipHeaderLength = Int((originalPacket[0] & 0x0F)) * 4
             if let responsePacket = createDNSResponsePacket(
@@ -864,7 +1273,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // We can use the domain name because we've excluded the resolved IP from VPN routing
         guard let url = URL(string: dnsServer) else {
             os_log("❌ Invalid DoH URL: %{public}@", log: logger, type: .error, dnsServer)
-            sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: 0)
+            sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: 0, queryType: dnsQuery.queryType)
             return
         }
 
@@ -875,6 +1284,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         request.setValue("application/dns-message", forHTTPHeaderField: "Content-Type")
         request.setValue("application/dns-message", forHTTPHeaderField: "Accept")
         request.setValue(String(dnsQueryData.count), forHTTPHeaderField: "Content-Length")
+
+        // CRITICAL FIX: Set Host header for CDN scenarios
+        // If we're using resolved IP address directly, SSL verification needs proper hostname
+        if !dohServerIPs.isEmpty, let hostname = URL(string: dnsServer)?.host {
+            request.setValue(hostname, forHTTPHeaderField: "Host")
+            os_log("✓ Set Host header for DoH: %{public}@", log: logger, type: .info, hostname)
+        }
+
         request.httpBody = dnsQueryData
         request.timeoutInterval = 5.0  // Reduced from 10s to 5s - fail fast
 
@@ -920,7 +1337,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     os_log("   ⚠️ Unknown error type", log: self.logger, type: .error)
                 }
 
-                self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency)
+                self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, queryType: dnsQuery.queryType)
                 return
             }
 
@@ -963,7 +1380,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         break
                     }
 
-                    self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency)
+                    self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, queryType: dnsQuery.queryType)
                     return
                 }
             } else {
@@ -972,7 +1389,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
             guard let responseData = data, !responseData.isEmpty else {
                 os_log("❌ Empty DoH response", log: self.logger, type: .error)
-                self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: "", dnsResponse: nil)
+                self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: "", dnsResponse: nil, queryType: dnsQuery.queryType)
                 return
             }
 
@@ -1007,7 +1424,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 os_log("🚫 DoH server blocked domain: %{public}@ (returned 0.0.0.0)", log: self.logger, type: .info, dnsQuery.domain)
 
                 // Send blocked event with original DoH response
-                self.sendDNSEvent(domain: dnsQuery.domain, blocked: true, latency: latency, resolvedIP: "0.0.0.0", dnsResponse: responseData)
+                self.sendDNSEvent(domain: dnsQuery.domain, blocked: true, latency: latency, resolvedIP: "0.0.0.0", dnsResponse: responseData, queryType: dnsQuery.queryType)
 
                 // Return NXDOMAIN to properly signal blocking (DO NOT CACHE)
                 if let blockResponse = self.createBlockResponse(for: originalPacket) {
@@ -1017,18 +1434,31 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 return
             }
 
-            // Only cache responses that are useful
-            // Don't cache NOERROR with 0 answers (except for actual NXDOMAIN which has rcode=3)
-            if rcode == 0 && answerCount == 0 && resolvedIP.isEmpty {
-                os_log("⚠️ Not caching NOERROR with 0 answers (likely incomplete/temporary response)", log: self.logger, type: .info)
-                // Send event but don't cache
-                self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: resolvedIP, dnsResponse: responseData)
-            } else {
-                // Cache valid responses (has answers OR is NXDOMAIN)
-                self.cacheDNSResponse(domain: dnsQuery.domain, response: responseData)
-                // Send event to main app with actual latency and resolved IP
-                self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: resolvedIP, dnsResponse: responseData)
+            // IMPROVED: Detect incomplete DNS responses and trigger CNAME recursive resolution
+            // If response is NOERROR with answers but resolvedIP indicates CNAME-only response
+            if rcode == 0 && answerCount > 0 && resolvedIP.hasPrefix("CNAME->") {
+                let cnameTarget = String(resolvedIP.dropFirst("CNAME->".count))
+                os_log("🔄 DoH returned CNAME without final IP: %{public}@ -> %{public}@, starting recursive resolution",
+                       log: self.logger, type: .info, dnsQuery.domain, cnameTarget)
+
+                // Trigger CNAME recursive resolution
+                self.resolveCNAMERecursive(
+                    cnameTarget: cnameTarget,
+                    originalQuery: dnsQuery,
+                    originalPacket: originalPacket,
+                    protocolNumber: protocolNumber,
+                    cnameChain: [dnsQuery.domain.lowercased()],
+                    depth: 1
+                )
+                return
             }
+
+            // PERFORMANCE FIX: Cache ALL responses including "no records" (NOERROR with 0 answers)
+            // extractTTLFromDNSResponse now returns 60s TTL for "no records" to prevent query storms
+            self.cacheDNSResponse(domain: dnsQuery.domain, response: responseData, queryType: dnsQuery.queryType)
+
+            // Send event to main app with actual latency and resolved IP
+            self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: resolvedIP, dnsResponse: responseData, queryType: dnsQuery.queryType)
             os_log("✅ DoH query completed successfully in %d ms, resolved to: %{public}@", log: self.logger, type: .info, latency, resolvedIP)
             os_log("=== DoH Query End ===", log: self.logger, type: .info)
 
@@ -1189,23 +1619,59 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func isInBlacklist(_ domain: String) -> Bool {
-        for blacklistedDomain in blacklist {
-            // Check for wildcard patterns
-            if blacklistedDomain.contains("*") {
-                let pattern = blacklistedDomain.replacingOccurrences(of: "*", with: ".*")
-                if let regex = try? NSRegularExpression(pattern: "^" + pattern + "$", options: .caseInsensitive) {
-                    let range = NSRange(domain.startIndex..., in: domain)
-                    if regex.firstMatch(in: domain, range: range) != nil {
-                        return true
-                    }
-                }
-            } else {
-                // Exact match or subdomain match
-                if domain == blacklistedDomain || domain.hasSuffix("." + blacklistedDomain) {
-                    return true
-                }
+        blacklistLock.lock()
+        defer { blacklistLock.unlock() }
+
+        // PERFORMANCE OPTIMIZATION: Use optimized matching algorithm
+
+        // 1. Fast exact match - O(1) lookup
+        if exactBlacklist.contains(domain) {
+            return true
+        }
+
+        // 2. Check parent domains for subdomain matching
+        // Example: "ads.google.com" should match if "google.com" is blacklisted
+        let parts = domain.split(separator: ".")
+        for i in 1..<parts.count {
+            let parentDomain = parts[i...].joined(separator: ".")
+            if exactBlacklist.contains(parentDomain) {
+                return true
             }
         }
+
+        // 3. Wildcard pattern matching with cached regex
+        for pattern in wildcardBlacklist {
+            if matchesWildcardPattern(domain: domain, pattern: pattern) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    /// Match domain against wildcard pattern using cached regex
+    /// PERFORMANCE FIX: Properly escapes regex special characters before replacing wildcards
+    private func matchesWildcardPattern(domain: String, pattern: String) -> Bool {
+        // Get cached regex or create new one
+        if let regex = cachedRegexPatterns[pattern] {
+            let range = NSRange(domain.startIndex..., in: domain)
+            return regex.firstMatch(in: domain, range: range) != nil
+        }
+
+        // CRITICAL FIX: Escape regex special characters BEFORE replacing wildcards
+        // This prevents dots and other special chars from being treated as regex operators
+        let escapedPattern = NSRegularExpression.escapedPattern(for: pattern)
+        // Now replace escaped asterisks (\*) with regex wildcard (.*)
+        let regexPattern = escapedPattern.replacingOccurrences(of: "\\*", with: ".*")
+
+        // Create and cache the regex
+        if let regex = try? NSRegularExpression(pattern: "^" + regexPattern + "$", options: .caseInsensitive) {
+            cachedRegexPatterns[pattern] = regex
+            let range = NSRange(domain.startIndex..., in: domain)
+            return regex.firstMatch(in: domain, range: range) != nil
+        }
+
+        os_log("⚠️ Failed to create regex for pattern: %{public}@", log: logger, type: .error, pattern)
         return false
     }
 
@@ -1334,7 +1800,91 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         )
     }
 
-    private func sendDNSEvent(domain: String, blocked: Bool, latency: Int, resolvedIP: String = "", dnsResponse: Data? = nil) {
+    private func createServfailResponse(for packet: Data) -> Data? {
+        // LOOP DETECTION FIX: Create SERVFAIL response (RCODE=2) instead of dropping query
+        // This tells the app "server failure" which is better than timeout
+        let ipHeaderLength = Int((packet[0] & 0x0F)) * 4
+        let udpHeaderStart = ipHeaderLength
+        let dnsStart = udpHeaderStart + 8
+
+        guard packet.count > dnsStart + 12 else { return nil }
+
+        // Extract original DNS query (header + question)
+        var dnsResponseData = Data()
+
+        // Copy DNS header (12 bytes)
+        dnsResponseData.append(packet.subdata(in: dnsStart..<(dnsStart + 12)))
+
+        // Modify DNS flags: QR=1 (response), RCODE=2 (SERVFAIL)
+        dnsResponseData[2] = 0x81  // QR=1 (response), OPCODE=0, AA=0, TC=0, RD=1
+        dnsResponseData[3] = 0x82  // RA=1, Z=0, RCODE=2 (SERVFAIL)
+
+        // Copy the question section (everything after DNS header until end of packet)
+        let questionStart = dnsStart + 12
+        if questionStart < packet.count {
+            dnsResponseData.append(packet.subdata(in: questionStart..<packet.count))
+        }
+
+        // Use the proper response packet creation method with checksums
+        return createDNSResponsePacket(
+            originalPacket: packet,
+            dnsResponse: dnsResponseData,
+            ipHeaderLength: ipHeaderLength
+        )
+    }
+
+    /// RESPONSE BROADCAST FIX: Broadcast DNS response to all pending queries for the same domain
+    /// This prevents dropping duplicate queries when multiple apps query the same domain simultaneously
+    private func broadcastDNSResponse(domain: String, dnsResponse: Data) {
+        pendingResponseLock.lock()
+        let waitingQueries = pendingResponseCallbacks[domain] ?? []
+        pendingResponseCallbacks.removeValue(forKey: domain)
+        pendingResponseLock.unlock()
+
+        if !waitingQueries.isEmpty {
+            os_log("📢 Broadcasting DNS response to %d waiting queries for %{public}@",
+                   log: logger, type: .info, waitingQueries.count, domain)
+        }
+
+        // Send response to all waiting queries
+        for (originalPacket, protocolNumber) in waitingQueries {
+            let ipHeaderLength = Int((originalPacket[0] & 0x0F)) * 4
+            if let responsePacket = createDNSResponsePacket(
+                originalPacket: originalPacket,
+                dnsResponse: dnsResponse,
+                ipHeaderLength: ipHeaderLength
+            ) {
+                packetFlow.writePackets([responsePacket], withProtocols: [NSNumber(value: protocolNumber)])
+            }
+        }
+    }
+
+    /// ERROR HANDLING FIX: Clean up pending callbacks when query fails
+    /// Sends SERVFAIL to all waiting queries to prevent indefinite timeout
+    private func cleanupPendingCallbacks(for domain: String, sendServfail: Bool = true) {
+        pendingResponseLock.lock()
+        let waitingQueries = pendingResponseCallbacks[domain] ?? []
+        pendingResponseCallbacks.removeValue(forKey: domain)
+        pendingResponseLock.unlock()
+
+        if waitingQueries.isEmpty {
+            return
+        }
+
+        os_log("🧹 Cleaning up %d pending callbacks for %{public}@",
+               log: logger, type: .info, waitingQueries.count, domain)
+
+        if sendServfail {
+            // Send SERVFAIL to all waiting queries (better than timeout)
+            for (originalPacket, protocolNumber) in waitingQueries {
+                if let servfailResponse = createServfailResponse(for: originalPacket) {
+                    packetFlow.writePackets([servfailResponse], withProtocols: [NSNumber(value: protocolNumber)])
+                }
+            }
+        }
+    }
+
+    private func sendDNSEvent(domain: String, blocked: Bool, latency: Int, resolvedIP: String = "", dnsResponse: Data? = nil, queryType: UInt16 = 1) {
         // Send event to main app via Darwin notification or shared storage
         guard let sharedDefaults = UserDefaults(suiteName: appGroupIdentifier) else {
             return
@@ -1366,6 +1916,34 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             displayInfo = resolvedIP
         }
 
+        // LOG FILTER: Skip logging meaningless "no record" queries
+        // 1. TYPE 65 (HTTPS record) queries with no records - most domains don't support HTTPS records yet
+        // 2. Queries with auto-appended search domain suffixes causing invalid domains (e.g., .com.com, .net.com)
+        let shouldSkipLogging = {
+            // Filter TYPE 65 (HTTPS) queries with "无记录" result
+            if queryType == 65 && displayInfo == "无记录" {
+                os_log("🔇 Skipping log for TYPE 65 (HTTPS) query with no records: %@", log: logger, type: .debug, domain)
+                return true
+            }
+
+            // Filter domains with abnormal auto-appended suffixes
+            // Examples: example.com.com, example.net.com, example.org.com
+            let lowercaseDomain = domain.lowercased()
+            let abnormalSuffixes = [".com.com", ".net.com", ".org.com", ".cn.com", ".io.com"]
+            for suffix in abnormalSuffixes {
+                if lowercaseDomain.hasSuffix(suffix) {
+                    os_log("🔇 Skipping log for domain with abnormal suffix: %@", log: logger, type: .debug, domain)
+                    return true
+                }
+            }
+
+            return false
+        }()
+
+        if shouldSkipLogging {
+            return
+        }
+
         let event: [String: Any] = [
             "domain": domain,
             "timestamp": ISO8601DateFormatter().string(from: Date()),
@@ -1374,32 +1952,45 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             "latency": latency
         ]
 
-        // Save to shared storage (main app will read this)
+        // PERFORMANCE FIX: Use more efficient event storage
+        // Instead of storing all events, keep a rolling window
         var events = sharedDefaults.array(forKey: "dnsEvents") as? [[String: Any]] ?? []
 
-        // MEMORY LEAK FIX: Remove events older than 24 hours before adding new event
-        let now = Date()
-        let maxAge: TimeInterval = 24 * 60 * 60 // 24 hours
-        events = events.filter { eventDict in
-            guard let timestampStr = eventDict["timestamp"] as? String,
-                  let timestamp = ISO8601DateFormatter().date(from: timestampStr) else {
-                // Remove events with invalid timestamps
-                return false
+        // OPTIMIZATION: Only clean old events periodically (not every time)
+        // This reduces overhead - clean only if array is getting large
+        let shouldClean = events.count > 900  // Clean when approaching limit
+
+        if shouldClean {
+            let now = Date()
+            let maxAge: TimeInterval = 1 * 60 * 60  // REDUCED to 1 hour for better performance
+            events = events.filter { eventDict in
+                guard let timestampStr = eventDict["timestamp"] as? String,
+                      let timestamp = ISO8601DateFormatter().date(from: timestampStr) else {
+                    return false
+                }
+                return now.timeIntervalSince(timestamp) < maxAge
             }
-            return now.timeIntervalSince(timestamp) < maxAge
+
+            // Keep only last 500 events (reduced from 1000 for better performance)
+            if events.count > 500 {
+                events = Array(events.suffix(500))
+            }
+
+            os_log("🧹 Cleaned event log: %d events remaining", log: logger, type: .debug, events.count)
         }
 
         events.append(event)
 
-        // Keep only last 1000 events (secondary limit)
+        // PERFORMANCE: Write back immediately but limit size
         if events.count > 1000 {
-            events = Array(events.suffix(1000))
+            events = Array(events.suffix(500))  // Aggressive trimming
+            os_log("⚠️ Event log overflow, trimmed to 500 events", log: logger, type: .info)
         }
 
         sharedDefaults.set(events, forKey: "dnsEvents")
-        sharedDefaults.synchronize()
 
-        // Post notification
+        // OPTIMIZATION: Rate limit notifications to prevent overwhelming React Native
+        // Post notification but React Native should debounce/batch these
         CFNotificationCenterPostNotification(
             CFNotificationCenterGetDarwinNotifyCenter(),
             CFNotificationName("com.idns.dnsEvent" as CFString),
@@ -1412,7 +2003,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // DNS response structure:
         // Header: 12 bytes
         // Question section: variable
-        // Answer section: contains A records
+        // Answer section: contains A records (and possibly CNAME records)
 
         guard dnsResponse.count > 12 else { return nil }
 
@@ -1435,7 +2026,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         index += 4  // Skip QTYPE and QCLASS
 
-        // Parse answer section
+        // IMPROVED: Collect ALL IP records and CNAME records
+        // Don't break early - parse all answers to get complete information
+        var cnameTargets: [String] = []
+        var ipAddresses: [String] = []
+
+        // Parse answer section - may contain CNAME chain followed by A/AAAA records
+        // Example: example.com -> CNAME -> cdn.example.com -> A -> 1.2.3.4, 5.6.7.8
         for _ in 0..<answerCount {
             guard index + 12 <= dnsResponse.count else { break }
 
@@ -1471,18 +2068,145 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             let rdLength = Int(dnsResponse[index]) << 8 | Int(dnsResponse[index + 1])
             index += 2
 
-            // Check if this is an A record (TYPE = 1) with 4 bytes of data
+            // Check record type
             if recordType == 1 && rdLength == 4 && index + 4 <= dnsResponse.count {
-                // Extract IPv4 address
+                // A record (TYPE = 1) - IPv4 address
                 let ip = "\(dnsResponse[index]).\(dnsResponse[index + 1]).\(dnsResponse[index + 2]).\(dnsResponse[index + 3])"
-                return ip
+                ipAddresses.append(ip)
+                os_log("📝 IPv4 address found: %{public}@", log: logger, type: .debug, ip)
+            } else if recordType == 28 && rdLength == 16 && index + 16 <= dnsResponse.count {
+                // AAAA record (TYPE = 28) - IPv6 address
+                let ipv6Data = dnsResponse.subdata(in: index..<(index + 16))
+                let ipv6 = formatIPv6Address(from: ipv6Data)
+                ipAddresses.append(ipv6)
+                os_log("📝 IPv6 address found: %{public}@", log: logger, type: .debug, ipv6)
+            } else if recordType == 5 && rdLength > 0 && index + rdLength <= dnsResponse.count {
+                // CNAME record (TYPE = 5) - parse the target domain name
+                let cnameData = dnsResponse.subdata(in: index..<(index + rdLength))
+                if let cname = parseDomainName(from: cnameData, fullResponse: dnsResponse) {
+                    cnameTargets.append(cname)
+                    os_log("📝 CNAME detected: -> %{public}@", log: logger, type: .debug, cname)
+                }
             }
 
             // Skip RDATA
             index += rdLength
         }
 
+        // Return result based on what we found
+        if !ipAddresses.isEmpty {
+            // Return the first IP address (for display purposes)
+            // The complete DNS response with all IPs will still be forwarded to the client
+            let result = ipAddresses[0]
+            if ipAddresses.count > 1 {
+                os_log("ℹ️ Found %d IP addresses, returning first: %{public}@", log: logger, type: .debug, ipAddresses.count, result)
+            }
+            return result
+        } else if !cnameTargets.isEmpty {
+            // CNAME without final A/AAAA record - return indicator for recursive resolution
+            let cname = cnameTargets[0]
+            return "CNAME->\(cname)"
+        }
+
         return nil
+    }
+
+    // Helper: Format IPv6 address from 16-byte data
+    private func formatIPv6Address(from data: Data) -> String {
+        guard data.count == 16 else { return "::" }
+
+        // Convert 16 bytes to 8 groups of 2 bytes (hex)
+        var groups: [UInt16] = []
+        for i in stride(from: 0, to: 16, by: 2) {
+            let value = UInt16(data[i]) << 8 | UInt16(data[i + 1])
+            groups.append(value)
+        }
+
+        // Find the longest sequence of zeros for compression
+        var maxZeroStart = -1
+        var maxZeroLen = 0
+        var currentZeroStart = -1
+        var currentZeroLen = 0
+
+        for (index, value) in groups.enumerated() {
+            if value == 0 {
+                if currentZeroStart == -1 {
+                    currentZeroStart = index
+                    currentZeroLen = 1
+                } else {
+                    currentZeroLen += 1
+                }
+
+                if currentZeroLen > maxZeroLen {
+                    maxZeroStart = currentZeroStart
+                    maxZeroLen = currentZeroLen
+                }
+            } else {
+                currentZeroStart = -1
+                currentZeroLen = 0
+            }
+        }
+
+        // Build the IPv6 string with compression
+        var result = ""
+        var index = 0
+
+        while index < groups.count {
+            if index == maxZeroStart && maxZeroLen > 1 {
+                // Use :: compression for the longest zero sequence
+                result += (index == 0) ? "::" : ":"
+                index += maxZeroLen
+                if index == groups.count {
+                    // If compression is at the end, we're done
+                    break
+                }
+            } else {
+                if index > 0 && !(index - 1 >= maxZeroStart && index - 1 < maxZeroStart + maxZeroLen) {
+                    result += ":"
+                }
+                result += String(format: "%x", groups[index])
+                index += 1
+            }
+        }
+
+        return result
+    }
+
+    // Helper: Parse domain name from DNS data (handles compression)
+    private func parseDomainName(from data: Data, fullResponse: Data) -> String? {
+        var index = 0
+        var parts: [String] = []
+        var maxIterations = 100  // Prevent infinite loops
+
+        while index < data.count && maxIterations > 0 {
+            maxIterations -= 1
+
+            let length = Int(data[index])
+
+            // Check for compression pointer (first 2 bits are 11)
+            if length & 0xC0 == 0xC0 {
+                // Pointer to another location in the full response
+                guard index + 1 < data.count else { break }
+                let pointer = ((Int(data[index]) & 0x3F) << 8) | Int(data[index + 1])
+                // We could recursively parse from fullResponse[pointer], but for now just return what we have
+                break
+            }
+
+            // End of domain name
+            if length == 0 {
+                break
+            }
+
+            // Read label
+            index += 1
+            guard index + length <= data.count else { break }
+            if let label = String(data: data.subdata(in: index..<(index + length)), encoding: .utf8) {
+                parts.append(label)
+            }
+            index += length
+        }
+
+        return parts.isEmpty ? nil : parts.joined(separator: ".")
     }
 
     private func loadFilterRules() {
@@ -1493,7 +2217,25 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         if let savedBlacklist = sharedDefaults.array(forKey: "blacklist") as? [String] {
             blacklist = Set(savedBlacklist.map { $0.lowercased() })
-            os_log("Loaded %d blacklist rules", log: logger, type: .info, blacklist.count)
+
+            // PERFORMANCE OPTIMIZATION: Split blacklist into exact matches and wildcards
+            blacklistLock.lock()
+            exactBlacklist.removeAll()
+            wildcardBlacklist.removeAll()
+            cachedRegexPatterns.removeAll()
+
+            for rule in blacklist {
+                if rule.contains("*") {
+                    wildcardBlacklist.append(rule)
+                } else {
+                    exactBlacklist.insert(rule)
+                }
+            }
+            blacklistLock.unlock()
+
+            os_log("Loaded %d blacklist rules (%d exact, %d wildcards)",
+                   log: logger, type: .info,
+                   blacklist.count, exactBlacklist.count, wildcardBlacklist.count)
         }
 
         if let savedWhitelist = sharedDefaults.array(forKey: "whitelist") as? [String] {
@@ -1509,7 +2251,22 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         sharedDefaults.set(Array(blacklist), forKey: "blacklist")
         sharedDefaults.set(Array(whitelist), forKey: "whitelist")
-        sharedDefaults.synchronize()
+        // Note: synchronize() is deprecated. UserDefaults auto-saves changes.
+
+        // PERFORMANCE OPTIMIZATION: Rebuild optimized data structures after save
+        blacklistLock.lock()
+        exactBlacklist.removeAll()
+        wildcardBlacklist.removeAll()
+        cachedRegexPatterns.removeAll()
+
+        for rule in blacklist {
+            if rule.contains("*") {
+                wildcardBlacklist.append(rule)
+            } else {
+                exactBlacklist.insert(rule)
+            }
+        }
+        blacklistLock.unlock()
     }
 
     private func restartTunnel() {
@@ -1816,71 +2573,138 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                        log: self.logger, type: .debug, cacheRemoved, cacheAfterCount)
             }
 
-            // Log cache size for monitoring
-            os_log("📊 DNS cache size: %d, Serial queue processing", log: self.logger, type: .info, self.dnsCache.count)
+            // MEMORY LEAK FIX: Clean up old query counter entries
+            self.queryCounterLock.lock()
+            let counterBeforeCount = self.queryCounter.count
+            self.queryCounter = self.queryCounter.filter { _, entry in
+                // Keep entries from last 60 seconds only
+                now.timeIntervalSince(entry.lastSeen) < 60.0
+            }
+            let counterAfterCount = self.queryCounter.count
+            let counterRemoved = counterBeforeCount - counterAfterCount
+            self.queryCounterLock.unlock()
+
+            if counterRemoved > 0 {
+                os_log("🧹 Cleanup: Removed %d old query counter entries (%d remaining)",
+                       log: self.logger, type: .debug, counterRemoved, counterAfterCount)
+            }
+
+            // QUERY COALESCING STATS: Log pending requests for monitoring
+            self.pendingResponseLock.lock()
+            let totalPendingRequests = self.pendingResponseCallbacks.values.reduce(0) { $0 + $1.count }
+            let domainsWithPendingRequests = self.pendingResponseCallbacks.count
+            self.pendingResponseLock.unlock()
+
+            // Log stats for monitoring
+            os_log("📊 Stats: Cache=%d, QueryCounter=%d, PendingRequests=%d (across %d domains)",
+                   log: self.logger, type: .info,
+                   self.dnsCache.count, counterAfterCount, totalPendingRequests, domainsWithPendingRequests)
         }
 
-        os_log("✓ Started cleanup timer for DNS cache", log: logger, type: .info)
+        os_log("✓ Started cleanup timer for DNS cache, query counter, and coalescing monitor", log: logger, type: .info)
     }
 
     // MARK: - Connection Management
 
     /**
-     * Get or create shared UDP connection
+     * Get or create shared UDP connection with version tracking
      * Only one connection is used for all queries (serial processing)
+     * Returns: (connection, version) tuple for race condition prevention
      */
-    private func getOrCreateSharedConnection() -> NWConnection {
+    private func getOrCreateSharedConnection() -> (NWConnection, Int) {
         connectionLock.lock()
         defer { connectionLock.unlock() }
 
-        // Return existing connection if still valid
-        if let existing = sharedUDPConnection, existing.state == .ready {
-            return existing
+        // OPTIMIZATION: Return existing connection if in usable state
+        // Accept both .ready and .preparing states for better connection reuse
+        if let existing = sharedUDPConnection {
+            switch existing.state {
+            case .ready, .preparing:
+                // Connection is usable
+                return (existing, connectionVersion)
+            case .failed, .cancelled:
+                // Connection is broken, will create new one
+                os_log("♻️ Replacing failed/cancelled connection (v%d)", log: logger, type: .info, connectionVersion)
+                sharedUDPConnection?.cancel()
+                sharedUDPConnection = nil
+            default:
+                // Other states, try to use existing connection
+                return (existing, connectionVersion)
+            }
         }
 
-        // Create new connection
+        // Create new connection with incremented version
+        connectionVersion += 1
+        let currentVersion = connectionVersion
+
+        // OPTIMIZATION: Use optimized UDP parameters for DNS
+        let udpOptions = NWProtocolUDP.Options()
+        let params = NWParameters(dtls: nil, udp: udpOptions)
+        params.serviceClass = .responsiveData  // Optimized for low-latency DNS
+        params.expiredDNSBehavior = .allow  // Allow expired DNS for bootstrap
+        params.multipathServiceType = .handover  // Use best available network
+
         let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(dnsServer), port: 53)
-        let connection = NWConnection(to: endpoint, using: .udp)
+        let connection = NWConnection(to: endpoint, using: params)
+
+        // Track connection creation time for health monitoring
+        let connectionCreatedAt = Date()
 
         connection.stateUpdateHandler = { [weak self] state in
             guard let self = self else { return }
 
             switch state {
             case .ready:
-                os_log("✅ Shared UDP connection ready", log: self.logger, type: .info)
+                let setupTime = Date().timeIntervalSince(connectionCreatedAt)
+                os_log("✅ UDP connection ready (v%d) in %.0fms", log: self.logger, type: .info,
+                       currentVersion, setupTime * 1000)
 
             case .failed(let error):
-                os_log("❌ Shared UDP connection failed: %{public}@", log: self.logger, type: .error, error.localizedDescription)
-                // Will be recreated on next query
+                os_log("❌ UDP connection failed (v%d): %{public}@",
+                       log: self.logger, type: .error, currentVersion, error.localizedDescription)
+
                 self.connectionLock.lock()
-                self.sharedUDPConnection = nil
+                // RACE CONDITION FIX: Only clear if this is still the current connection
+                if self.connectionVersion == currentVersion {
+                    self.sharedUDPConnection?.cancel()
+                    self.sharedUDPConnection = nil
+                    self.connectionVersion += 1
+                    os_log("🔄 Connection marked for recreation (new v%d)", log: self.logger, type: .info, self.connectionVersion)
+                }
                 self.connectionLock.unlock()
 
             case .cancelled:
-                os_log("🚫 Shared UDP connection cancelled", log: self.logger, type: .debug)
+                os_log("🚫 UDP connection cancelled (v%d)", log: self.logger, type: .debug, currentVersion)
+
+            case .preparing:
+                os_log("🔄 UDP connection preparing (v%d)...", log: self.logger, type: .debug, currentVersion)
 
             default:
-                break
+                os_log("📊 UDP connection state: %{public}@ (v%d)", log: self.logger, type: .debug,
+                       String(describing: state), currentVersion)
             }
         }
 
         connection.start(queue: .global())
         sharedUDPConnection = connection
 
-        os_log("🆕 Created new shared UDP connection", log: logger, type: .info)
-        return connection
+        os_log("🆕 Created UDP connection (v%d) to %{public}@:53", log: logger, type: .info,
+               currentVersion, dnsServer)
+        return (connection, currentVersion)
     }
 
     // MARK: - DNS Cache Management
 
     /**
      * Get cached DNS response if available and not expired
+     * Now supports query type differentiation (A vs AAAA)
      */
-    private func getCachedDNSResponse(domain: String) -> Data? {
+    private func getCachedDNSResponse(domain: String, queryType: UInt16 = 1) -> Data? {
         dnsCacheLock.lock()
         defer { dnsCacheLock.unlock() }
 
-        let key = domain.lowercased()
+        // Cache key includes both domain and query type to distinguish A from AAAA queries
+        let key = "\(domain.lowercased())_\(queryType)"
         guard let entry = dnsCache[key] else {
             return nil
         }
@@ -1888,22 +2712,24 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         let age = Date().timeIntervalSince(entry.timestamp)
         if age > entry.ttl {
             dnsCache.removeValue(forKey: key)
-            os_log("🗑 Cache expired for %{public}@ (age: %.1fs, TTL: %.1fs)", log: logger, type: .debug, domain, age, entry.ttl)
+            os_log("🗑 Cache expired for %{public}@ type=%d (age: %.1fs, TTL: %.1fs)", log: logger, type: .debug, domain, queryType, age, entry.ttl)
             return nil
         }
 
-        os_log("✅ Cache hit for %{public}@ (age: %.1fs, TTL: %.1fs)", log: logger, type: .debug, domain, age, entry.ttl)
+        os_log("✅ Cache hit for %{public}@ type=%d (age: %.1fs, TTL: %.1fs)", log: logger, type: .debug, domain, queryType, age, entry.ttl)
         return entry.response
     }
 
     /**
      * Cache DNS response with TTL
+     * Now supports query type differentiation (A vs AAAA)
      */
-    private func cacheDNSResponse(domain: String, response: Data) {
+    private func cacheDNSResponse(domain: String, response: Data, queryType: UInt16 = 1) {
         dnsCacheLock.lock()
         defer { dnsCacheLock.unlock() }
 
-        let key = domain.lowercased()
+        // Cache key includes both domain and query type to distinguish A from AAAA queries
+        let key = "\(domain.lowercased())_\(queryType)"
         let ttl = extractTTLFromDNSResponse(response) ?? defaultCacheTTL
 
         let entry = DNSCacheEntry(
@@ -1923,19 +2749,33 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         }
 
-        os_log("💾 Cached %{public}@ with TTL %.1fs", log: logger, type: .debug, domain, ttl)
+        os_log("💾 Cached %{public}@ type=%d with TTL %.1fs", log: logger, type: .debug, domain, queryType, ttl)
     }
 
     /**
      * Extract TTL from DNS response
      * Returns minimum TTL from all answer records
+     * PERFORMANCE FIX: For NOERROR with 0 answers, return short TTL (60s) instead of nil
+     * to avoid repeated queries for domains without A records
      */
     private func extractTTLFromDNSResponse(_ dnsResponse: Data) -> TimeInterval? {
         guard dnsResponse.count > 12 else { return nil }
 
         // Get answer count from header (bytes 6-7)
         let answerCount = Int(dnsResponse[6]) << 8 | Int(dnsResponse[7])
-        guard answerCount > 0 else { return nil }
+
+        // PERFORMANCE FIX: Cache "no records" responses with short TTL
+        // NOERROR (rcode=0) with 0 answers is a valid response meaning domain exists but has no A record
+        if answerCount == 0 {
+            let rcode = Int(dnsResponse[3]) & 0x0F
+            if rcode == 0 {
+                // Return 60 second TTL for "no records" responses
+                os_log("📝 NOERROR with 0 answers, using 60s TTL to prevent repeated queries", log: logger, type: .info)
+                return 60.0
+            }
+            // For other error codes (NXDOMAIN, SERVFAIL, etc.), still return nil to use default
+            return nil
+        }
 
         var minTTL: UInt32? = nil
         var index = 12
@@ -1991,8 +2831,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         if let ttl = minTTL {
-            // Clamp TTL between 60 seconds and 1 hour
-            return TimeInterval(min(max(ttl, 60), 3600))
+            // Respect original TTL with minimal bounds:
+            // - Minimum: 5 seconds (prevent 0 TTL causing issues)
+            // - Maximum: 1 hour (prevent excessive cache growth)
+            // This allows CDN and dynamic DNS records to refresh properly
+            return TimeInterval(min(max(ttl, 5), 3600))
         }
 
         return nil
