@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>iDNS</string>
+	<string>iDNS家庭守护</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -34,7 +34,11 @@
 		<true/>
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string></string>
+	<string>本应用不会收集您的位置信息</string>
+	<key>NSUserTrackingUsageDescription</key>
+	<string>我们不会跟踪您的活动，此权限仅用于提供个性化的家庭守护体验</string>
+	<key>NSAppTransportSecurityDescription</key>
+	<string>为了提供安全的DNS服务，本应用需要访问网络</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -51,5 +55,9 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<false/>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Feather.ttf</string>
+	</array>
 </dict>
 </plist>
