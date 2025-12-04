@@ -8,32 +8,18 @@ interface DnsProviderLogoProps {
 }
 
 const PROVIDER_CONFIGS: Record<string, { letter: string; bg: string; color: string }> = {
-  adguard: {
-    letter: 'A',
-    bg: '#68BC71',
-    color: '#FFFFFF',
-  },
-  cloudflare: {
-    letter: 'C',
-    bg: '#F6821F',
-    color: '#FFFFFF',
-  },
-  google: {
-    letter: 'G',
-    bg: '#4285F4',
-    color: '#FFFFFF',
-  },
-  nextdns: {
-    letter: 'N',
-    bg: '#6366F1',
+  idns: {
+    letter: 'I',
+    bg: '#06b6d4',
     color: '#FFFFFF',
   },
 };
 
 export const DnsProviderLogo: React.FC<DnsProviderLogoProps> = ({ providerId, size = 24 }) => {
+  // 只支持 I-DNS，其他情况使用默认配置
   const config = PROVIDER_CONFIGS[providerId] || {
-    letter: '?',
-    bg: '#64748b',
+    letter: 'I',
+    bg: '#06b6d4',
     color: '#FFFFFF',
   };
 

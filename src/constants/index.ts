@@ -1,12 +1,14 @@
 import { DnsProvider, LogRetentionPeriod } from '../types';
 
-// DNS 服务商配置
+// DNS 服务商配置 - 只保留 I-DNS
 export const DNS_PROVIDERS: DnsProvider[] = [
-  { id: 'adguard', name: 'AdGuard DNS', description: '家庭保护，过滤广告与恶意内容', icon: 'shield' },
-  { id: 'cloudflare', name: 'Cloudflare Family', description: '家庭友好的安全DNS (1.1.1.3)', icon: 'zap' },
-  { id: 'google', name: 'Google DNS', description: '稳定可靠 (8.8.8.8)', icon: 'search' },
-  { id: 'nextdns', name: 'NextDNS', description: '自定义儿童上网保护策略', icon: 'settings' },
+  { id: 'idns', name: 'I-DNS', description: '自定义儿童上网保护策略', icon: 'settings' },
 ];
+
+// DNS 服务商配置映射（包括DoH支持）
+export const DNS_SERVER_MAP: Record<string, { type: 'udp' | 'doh', server: string }> = {
+  'idns': { type: 'doh', server: 'https://i-dns.wnluo.com/dns-query' },
+};
 
 // 日志保留时间选项配置
 export const LOG_RETENTION_OPTIONS: Array<{

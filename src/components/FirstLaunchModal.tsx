@@ -9,7 +9,7 @@ import {
   Dimensions,
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Feather';
-import { responsive } from '../utils/responsive';
+import { responsive, scaleWidth, scaleHeight, scaleFont, scaleSpacing } from '../utils/responsive';
 
 const { height } = Dimensions.get('window');
 
@@ -37,7 +37,7 @@ export const FirstLaunchModal: React.FC<FirstLaunchModalProps> = ({
         <View style={styles.modalContainer}>
           <View style={styles.header}>
             <View style={styles.iconContainer}>
-              <Icon name="shield" size={responsive(40)} color="#3b82f6" />
+              <Icon name="shield" size={scaleWidth(40)} color="#3b82f6" />
             </View>
             <Text style={styles.title}>欢迎使用 iDNS 家庭守护</Text>
             <Text style={styles.subtitle}>网络安全教育工具</Text>
@@ -149,14 +149,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(15, 23, 42, 0.95)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: responsive(20),
+    padding: scaleSpacing(20),
   },
   modalContainer: {
     width: '100%',
-    maxWidth: responsive(400),
+    maxWidth: scaleWidth(400),
     maxHeight: height * 0.85,
     backgroundColor: '#1e293b',
-    borderRadius: responsive(20),
+    borderRadius: scaleSpacing(20),
     overflow: 'hidden',
     elevation: 5,
     shadowColor: '#000',
@@ -166,67 +166,67 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: 'center',
-    paddingTop: responsive(32),
-    paddingBottom: responsive(24),
-    paddingHorizontal: responsive(24),
+    paddingTop: scaleSpacing(32),
+    paddingBottom: scaleSpacing(24),
+    paddingHorizontal: scaleSpacing(24),
     backgroundColor: '#0f172a',
   },
   iconContainer: {
-    width: responsive(80),
-    height: responsive(80),
-    borderRadius: responsive(40),
+    width: scaleWidth(80),
+    height: scaleWidth(80),
+    borderRadius: scaleWidth(40),
     backgroundColor: 'rgba(59, 130, 246, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: responsive(16),
+    marginBottom: scaleSpacing(16),
   },
   title: {
-    fontSize: responsive(22),
+    fontSize: scaleFont(22),
     fontWeight: '700',
     color: '#f1f5f9',
-    marginBottom: responsive(8),
+    marginBottom: scaleSpacing(8),
     textAlign: 'center',
   },
   subtitle: {
-    fontSize: responsive(14),
+    fontSize: scaleFont(14),
     color: '#94a3b8',
     textAlign: 'center',
   },
   content: {
     flex: 1,
-    paddingHorizontal: responsive(24),
+    paddingHorizontal: scaleSpacing(24),
   },
   section: {
-    paddingVertical: responsive(20),
+    paddingVertical: scaleSpacing(20),
   },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: responsive(16),
+    marginBottom: scaleSpacing(16),
   },
   sectionTitle: {
-    fontSize: responsive(16),
+    fontSize: scaleFont(16),
     fontWeight: '600',
     color: '#f1f5f9',
-    marginLeft: responsive(8),
+    marginLeft: scaleSpacing(8),
   },
   point: {
     flexDirection: 'row',
-    marginBottom: responsive(12),
-    paddingLeft: responsive(4),
+    marginBottom: scaleSpacing(12),
+    paddingLeft: scaleSpacing(4),
   },
   bullet: {
-    width: responsive(6),
-    height: responsive(6),
-    borderRadius: responsive(3),
+    width: scaleWidth(6),
+    height: scaleWidth(6),
+    borderRadius: scaleWidth(3),
     backgroundColor: '#3b82f6',
-    marginTop: responsive(6),
-    marginRight: responsive(12),
+    marginTop: scaleSpacing(6),
+    marginRight: scaleSpacing(12),
   },
   pointText: {
     flex: 1,
-    fontSize: responsive(14),
-    lineHeight: responsive(20),
+    fontSize: scaleFont(14),
+    lineHeight: scaleFont(20),
     color: '#cbd5e1',
   },
   highlight: {
@@ -236,40 +236,40 @@ const styles = StyleSheet.create({
   divider: {
     height: 1,
     backgroundColor: '#334155',
-    marginHorizontal: responsive(-24),
+    marginHorizontal: scaleSpacing(-24),
   },
   agreementText: {
-    fontSize: responsive(14),
+    fontSize: scaleFont(14),
     color: '#cbd5e1',
-    marginBottom: responsive(12),
+    marginBottom: scaleSpacing(12),
   },
   linkButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: responsive(8),
-    marginBottom: responsive(8),
+    paddingVertical: scaleSpacing(8),
+    marginBottom: scaleSpacing(8),
   },
   linkText: {
-    fontSize: responsive(14),
+    fontSize: scaleFont(14),
     color: '#3b82f6',
     fontWeight: '600',
-    marginRight: responsive(6),
+    marginRight: scaleSpacing(6),
   },
   childProtectionNote: {
-    fontSize: responsive(13),
+    fontSize: scaleFont(13),
     color: '#f43f5e',
-    marginTop: responsive(12),
-    paddingLeft: responsive(4),
+    marginTop: scaleSpacing(12),
+    paddingLeft: scaleSpacing(4),
   },
   footer: {
-    padding: responsive(24),
-    paddingTop: responsive(16),
+    padding: scaleSpacing(24),
+    paddingTop: scaleSpacing(16),
     backgroundColor: '#0f172a',
   },
   acceptButton: {
     backgroundColor: '#3b82f6',
-    borderRadius: responsive(12),
-    paddingVertical: responsive(16),
+    borderRadius: scaleSpacing(12),
+    paddingVertical: scaleSpacing(16),
     alignItems: 'center',
     elevation: 2,
     shadowColor: '#3b82f6',
@@ -278,7 +278,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
   },
   acceptButtonText: {
-    fontSize: responsive(16),
+    fontSize: scaleFont(16),
     fontWeight: '600',
     color: '#ffffff',
   },

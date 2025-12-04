@@ -21,14 +21,26 @@ const formatTimestamp = (timestamp: string): string => {
 const LogItem: React.FC<LogItemProps> = ({ log }) => {
   const isBlocked = log.status === 'blocked';
 
-  const categoryMap: Record<string, { label: string; color: string }> = {
-    tracker: { label: '追踪器', color: '#f59e0b' },
-    ad: { label: '广告', color: '#ef4444' },
-    content: { label: '内容', color: '#10b981' },
-    unknown: { label: '未知', color: '#64748b' },
+  // Determine badge color and style based on content
+  const getBadgeStyle = () => {
+    if (log.category === '已拦截') {
+      return { color: '#ef4444', bgColor: 'rgba(239, 68, 68, 0.15)' };
+    } else if (log.category === '无记录') {
+      // Domain exists but no A record - yellow
+      return { color: '#eab308', bgColor: 'rgba(234, 179, 8, 0.15)' };
+    } else if (log.category === '域名不存在') {
+      // Domain does not exist (NXDOMAIN) - orange
+      return { color: '#f97316', bgColor: 'rgba(249, 115, 22, 0.15)' };
+    } else if (log.category === '解析失败') {
+      // DNS resolution failed - amber
+      return { color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.15)' };
+    } else {
+      // IP address - use cyan/teal color
+      return { color: '#06b6d4', bgColor: 'rgba(6, 182, 212, 0.15)' };
+    }
   };
 
-  const category = categoryMap[log.category] || categoryMap.unknown;
+  const badgeStyle = getBadgeStyle();
 
   return (
     <View style={styles.logItem}>
@@ -40,9 +52,9 @@ const LogItem: React.FC<LogItemProps> = ({ log }) => {
       <View style={styles.logContent}>
         <Text style={styles.logDomain} numberOfLines={1}>{log.domain}</Text>
         <View style={styles.logMeta}>
-          <View style={[styles.categoryBadge, { backgroundColor: category.color + '20' }]}>
-            <Text style={[styles.categoryText, { color: category.color }]}>
-              {category.label}
+          <View style={[styles.categoryBadge, { backgroundColor: badgeStyle.bgColor }]}>
+            <Text style={[styles.categoryText, { color: badgeStyle.color }]}>
+              {log.category}
             </Text>
           </View>
           <Text style={styles.logTime}>{formatTimestamp(log.timestamp)}</Text>

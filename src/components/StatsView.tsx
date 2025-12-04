@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { View, Text, ScrollView, StyleSheet, Dimensions } from 'react';
+import { View, Text, ScrollView, StyleSheet, Dimensions } from 'react-native';
 import { LineChart } from 'react-native-chart-kit';
 import Icon from 'react-native-vector-icons/Feather';
 import { CircularProgress } from './CircularProgress';
@@ -83,12 +83,6 @@ export const StatsView: React.FC = () => {
       <View style={styles.header}>
         <Text style={styles.title}>数据统计</Text>
         <Text style={styles.subtitle}>全面了解家庭守护效果</Text>
-        <View style={styles.demoNote}>
-          <Icon name="info" size={14} color="#06b6d4" />
-          <Text style={styles.demoNoteText}>
-            数据为演示示例，帮助您了解DNS过滤工作原理
-          </Text>
-        </View>
       </View>
 
       {/* Summary Cards */}
@@ -231,23 +225,6 @@ const styles = StyleSheet.create({
     fontSize: responsive.fontSize.base,
     color: '#94a3b8',
     marginBottom: responsive.spacing.md,
-  },
-  demoNote: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(6, 182, 212, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.3)',
-    borderRadius: responsive.borderRadius.md,
-    padding: responsive.spacing.sm,
-    marginTop: responsive.spacing.sm,
-  },
-  demoNoteText: {
-    flex: 1,
-    fontSize: responsive.fontSize.xs,
-    color: '#06b6d4',
-    marginLeft: responsive.spacing.xs,
-    lineHeight: responsive.fontSize.xs * 1.4,
   },
   summaryRow: {
     flexDirection: 'row',

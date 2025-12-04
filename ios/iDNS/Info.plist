@@ -39,6 +39,8 @@
 	<string>我们不会跟踪您的活动，此权限仅用于提供个性化的家庭守护体验</string>
 	<key>NSAppTransportSecurityDescription</key>
 	<string>为了提供安全的DNS服务，本应用需要访问网络</string>
+	<key>NEVPNUsageDescription</key>
+	<string>iDNS 需要创建 VPN 配置以提供 DNS 过滤保护，保护您的家庭网络安全</string>
 	<key>RCTNewArchEnabled</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

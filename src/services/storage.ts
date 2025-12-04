@@ -17,7 +17,7 @@ const STORAGE_KEYS = {
 
 // 默认设置
 const DEFAULT_SETTINGS: AppSettings = {
-  selectedDnsProvider: 'adguard',
+  selectedDnsProvider: 'idns',
   autoStart: false,
   childProtectionMode: false,
   notificationsEnabled: true,

@@ -8,6 +8,5 @@
 #import <React/RCTBridgeModule.h>
 #import <React/RCTEventEmitter.h>
 
-@interface DNSVPNModule : RCTEventEmitter <RCTBridgeModule>
-
-@end
+// Swift module will be exposed via @objc
+// No need for @interface here

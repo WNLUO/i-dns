@@ -23,7 +23,7 @@ export interface DNSRequestEvent {
   domain: string;
   timestamp: string;
   status: 'blocked' | 'allowed';
-  category: 'tracker' | 'ad' | 'content' | 'unknown';
+  category: string;  // IP address, "已拦截", or "解析失败"
   latency: number;
 }
 

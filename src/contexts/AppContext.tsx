@@ -52,7 +52,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
   const [settings, setSettings] = useState<AppSettings>({
-    selectedDnsProvider: 'adguard',
+    selectedDnsProvider: 'idns',
     autoStart: false,
     childProtectionMode: false,
     notificationsEnabled: true,
@@ -111,14 +111,16 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
     }
 
     // 监听 DNS 请求事件
+    let requestCounter = 0;
     const unsubscribe = vpnService.onDNSRequest((event: DNSRequestEvent) => {
-      // 创建日志记录
+      // 创建日志记录，使用时间戳 + 计数器确保唯一性
+      // 直接使用原生传过来的 category（包含解析后的 IP 地址或状态）
       const log: DnsLog = {
-        id: Date.now().toString(),
+        id: `${Date.now()}-${++requestCounter}`,
         domain: event.domain,
         timestamp: event.timestamp,
         status: event.status,
-        category: event.category,
+        category: event.category,  // IP address, "已拦截", or "解析失败"
         latency: event.latency,
       };
 
@@ -185,6 +187,34 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
     try {
       const newSettings = await storage.updateSettings(updates);
       setSettings(newSettings);
+
+      // 如果更新了DNS服务商设置，且VPN已连接，则通知VPN扩展切换DNS服务器
+      if (updates.selectedDnsProvider && isConnected && vpnService.isAvailable()) {
+        console.log('========================================');
+        console.log('🔄 DNS Provider Changed');
+        console.log(`Provider ID: ${updates.selectedDnsProvider}`);
+
+        const {DNS_SERVER_MAP} = await import('../constants');
+        const dnsConfig = DNS_SERVER_MAP[updates.selectedDnsProvider];
+
+        if (dnsConfig) {
+          console.log(`DNS Type: ${dnsConfig.type}`);
+          console.log(`DNS Server: ${dnsConfig.server}`);
+
+          try {
+            console.log('📤 Sending DNS update to VPN extension...');
+            await vpnService.updateDNSServer(dnsConfig.server);
+            console.log('✅ DNS server updated successfully');
+            console.log('========================================');
+          } catch (error) {
+            console.error('❌ Failed to update DNS server in VPN:', error);
+            console.log('========================================');
+          }
+        } else {
+          console.error(`❌ No DNS configuration found for provider: ${updates.selectedDnsProvider}`);
+          console.log('========================================');
+        }
+      }
     } catch (error) {
       console.error('Failed to update settings:', error);
       throw error;
@@ -198,10 +228,40 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
         if (vpnService.isAvailable()) {
           try {
             await vpnService.start();
-            console.log('VPN service started');
+            console.log('VPN service started successfully');
+
+            // 启动后立即设置当前选择的DNS服务器
+            console.log('========================================');
+            console.log('⚙️ Setting Initial DNS Configuration');
+            console.log(`Provider ID: ${settings.selectedDnsProvider}`);
+
+            const {DNS_SERVER_MAP} = await import('../constants');
+            const dnsConfig = DNS_SERVER_MAP[settings.selectedDnsProvider];
+
+            if (dnsConfig) {
+              console.log(`DNS Type: ${dnsConfig.type}`);
+              console.log(`DNS Server: ${dnsConfig.server}`);
+
+              try {
+                console.log('📤 Sending initial DNS config to VPN extension...');
+                await vpnService.updateDNSServer(dnsConfig.server);
+                console.log('✅ Initial DNS server configured successfully');
+                console.log('========================================');
+              } catch (error) {
+                console.error('❌ Failed to set initial DNS server:', error);
+                console.log('========================================');
+              }
+            } else {
+              console.error(`❌ No DNS configuration found for provider: ${settings.selectedDnsProvider}`);
+              console.log('========================================');
+            }
           } catch (error) {
-            console.warn('VPN service not available, running in simulation mode');
+            console.error('VPN start error:', error);
+            throw error;
           }
+        } else {
+          console.warn('VPN service is not available (DNSVPNModule not found)');
+          throw new Error('VPN module not available. Please rebuild the app.');
         }
       } else {
         // 停止 VPN
@@ -211,6 +271,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
             console.log('VPN service stopped');
           } catch (error) {
             console.error('Failed to stop VPN:', error);
+            throw error;
           }
         }
       }
@@ -218,7 +279,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
       await storage.saveConnectionState(connected);
       setIsConnectedState(connected);
     } catch (error) {
-      console.error('Failed to save connection state:', error);
+      console.error('Failed in setIsConnected:', error);
       throw error;
     }
   };
@@ -261,7 +322,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
   const addBlacklistRule = async (domain: string, note?: string) => {
     try {
       const rule: DomainRule = {
-        id: Date.now().toString(),
+        id: `blacklist-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         domain,
         type: 'blacklist',
         addedAt: new Date().toISOString(),
@@ -288,7 +349,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
   const addWhitelistRule = async (domain: string, note?: string) => {
     try {
       const rule: DomainRule = {
-        id: Date.now().toString(),
+        id: `whitelist-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         domain,
         type: 'whitelist',
         addedAt: new Date().toISOString(),

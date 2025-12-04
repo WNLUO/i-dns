@@ -52,21 +52,39 @@ class DNSVPNModule: RCTEventEmitter {
     @objc func startVPN(_ resolve: @escaping RCTPromiseResolveBlock,
                        rejecter reject: @escaping RCTPromiseRejectBlock) {
 
+        print("========================================")
+        print("📱 DNSVPNModule: startVPN called")
+        print("========================================")
+
         loadVPNConfiguration { [weak self] error in
             if let error = error {
+                print("❌ Failed to load VPN configuration: \(error.localizedDescription)")
                 reject("VPN_CONFIG_ERROR", "Failed to load VPN configuration: \(error.localizedDescription)", error)
                 return
             }
 
             guard let self = self, let manager = self.vpnManager else {
+                print("❌ VPN manager not initialized")
                 reject("VPN_MANAGER_ERROR", "VPN manager not initialized", nil)
                 return
             }
 
+            print("✓ VPN manager loaded")
+            print("VPN Configuration:")
+            print("  Description: \(manager.localizedDescription ?? "none")")
+            print("  Enabled: \(manager.isEnabled)")
+            print("  Connection Status: \(manager.connection.status.rawValue)")
+
             do {
+                print("🚀 Starting VPN tunnel...")
                 try manager.connection.startVPNTunnel()
+                print("✅ startVPNTunnel() called successfully")
+                print("📊 Immediate status after start: \(manager.connection.status.rawValue)")
+                print("========================================")
                 resolve(true)
             } catch {
+                print("❌ Failed to start VPN tunnel: \(error.localizedDescription)")
+                print("========================================")
                 reject("VPN_START_ERROR", "Failed to start VPN: \(error.localizedDescription)", error)
             }
         }
@@ -75,12 +93,20 @@ class DNSVPNModule: RCTEventEmitter {
     @objc func stopVPN(_ resolve: @escaping RCTPromiseResolveBlock,
                       rejecter reject: @escaping RCTPromiseRejectBlock) {
 
+        print("========================================")
+        print("🛑 DNSVPNModule: stopVPN called")
+        print("========================================")
+
         guard let manager = vpnManager else {
+            print("❌ VPN manager not initialized")
             reject("VPN_MANAGER_ERROR", "VPN manager not initialized", nil)
             return
         }
 
+        print("📊 Status before stop: \(manager.connection.status.rawValue)")
         manager.connection.stopVPNTunnel()
+        print("✅ stopVPNTunnel() called")
+        print("========================================")
         resolve(nil)
     }
 
@@ -172,25 +198,67 @@ class DNSVPNModule: RCTEventEmitter {
     // MARK: - Private Methods
 
     private func loadVPNConfiguration(completion: ((Error?) -> Void)? = nil) {
+        print("🔄 Loading VPN configuration...")
+
         NETunnelProviderManager.loadAllFromPreferences { [weak self] managers, error in
             guard let self = self else { return }
 
             if let error = error {
+                print("❌ Error loading VPN configurations: \(error.localizedDescription)")
                 completion?(error)
                 return
             }
 
+            print("📦 Found \(managers?.count ?? 0) VPN configuration(s)")
+
             if let manager = managers?.first {
+                print("✓ Using existing VPN configuration")
+                print("  Description: \(manager.localizedDescription ?? "none")")
+                print("  Enabled: \(manager.isEnabled)")
+                print("  Provider Bundle ID: \((manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier ?? "none")")
+
+                // CRITICAL FIX: Ensure DNS configuration is correct (fix old configs)
+                if let providerProtocol = manager.protocolConfiguration as? NETunnelProviderProtocol {
+                    let currentDNS = providerProtocol.providerConfiguration?["dnsServer"] as? String ?? ""
+                    let expectedDNS = "https://i-dns.wnluo.com/dns-query"
+
+                    if currentDNS != expectedDNS {
+                        print("⚠️ DNS configuration mismatch!")
+                        print("  Current: \(currentDNS)")
+                        print("  Expected: \(expectedDNS)")
+                        print("🔧 Updating DNS configuration...")
+
+                        providerProtocol.providerConfiguration = [
+                            "dnsServer": expectedDNS
+                        ]
+                        manager.protocolConfiguration = providerProtocol
+
+                        manager.saveToPreferences { error in
+                            if let error = error {
+                                print("❌ Failed to update DNS configuration: \(error.localizedDescription)")
+                            } else {
+                                print("✅ DNS configuration updated successfully")
+                            }
+                            self.vpnManager = manager
+                            completion?(error)
+                        }
+                        return
+                    }
+                }
+
                 self.vpnManager = manager
                 completion?(nil)
             } else {
                 // Create new VPN configuration
+                print("⚠️ No existing VPN configuration, creating new one...")
                 self.createVPNConfiguration(completion: completion)
             }
         }
     }
 
     private func createVPNConfiguration(completion: ((Error?) -> Void)? = nil) {
+        print("🆕 Creating new VPN configuration...")
+
         let manager = NETunnelProviderManager()
         manager.localizedDescription = "iDNS Family Protection"
 
@@ -198,19 +266,34 @@ class DNSVPNModule: RCTEventEmitter {
         providerProtocol.providerBundleIdentifier = "org.reactjs.native.example.iDNS.DNSPacketTunnelProvider"
         providerProtocol.serverAddress = "iDNS VPN"
         providerProtocol.providerConfiguration = [
-            "dnsServer": "94.140.14.14" // AdGuard DNS Family Protection
+            "dnsServer": "https://i-dns.wnluo.com/dns-query" // I-DNS DoH
         ]
 
         manager.protocolConfiguration = providerProtocol
         manager.isEnabled = true
 
+        print("  Description: \(manager.localizedDescription ?? "none")")
+        print("  Provider Bundle ID: \(providerProtocol.providerBundleIdentifier)")
+        print("  Server Address: \(providerProtocol.serverAddress ?? "none")")
+        print("  DNS Server: \(providerProtocol.providerConfiguration?["dnsServer"] ?? "none")")
+        print("💾 Saving VPN configuration...")
+
         manager.saveToPreferences { error in
             if let error = error {
+                print("❌ Failed to save VPN configuration: \(error.localizedDescription)")
                 completion?(error)
                 return
             }
 
+            print("✓ VPN configuration saved")
+            print("🔄 Reloading VPN configuration...")
+
             manager.loadFromPreferences { error in
+                if let error = error {
+                    print("❌ Failed to reload VPN configuration: \(error.localizedDescription)")
+                } else {
+                    print("✅ VPN configuration created and loaded successfully")
+                }
                 self.vpnManager = manager
                 completion?(error)
             }
@@ -227,10 +310,33 @@ class DNSVPNModule: RCTEventEmitter {
     }
 
     @objc private func vpnStatusDidChange() {
-        guard let manager = vpnManager, hasListeners else { return }
+        guard let manager = vpnManager else { return }
 
-        let isConnected = manager.connection.status == .connected
-        sendEvent(withName: "VPNStatusChanged", body: isConnected)
+        let status = manager.connection.status
+        let isConnected = status == .connected
+
+        print("========================================")
+        print("📡 VPN Status Changed")
+        print("Status: \(statusString(status))")
+        print("Status Raw Value: \(status.rawValue)")
+        print("Is Connected: \(isConnected)")
+        print("========================================")
+
+        if hasListeners {
+            sendEvent(withName: "VPNStatusChanged", body: isConnected)
+        }
+    }
+
+    private func statusString(_ status: NEVPNStatus) -> String {
+        switch status {
+        case .invalid: return "Invalid"
+        case .disconnected: return "Disconnected"
+        case .connecting: return "Connecting"
+        case .connected: return "Connected"
+        case .reasserting: return "Reasserting"
+        case .disconnecting: return "Disconnecting"
+        @unknown default: return "Unknown"
+        }
     }
 
     private func observeDNSEvents() {
@@ -293,16 +399,16 @@ class DNSVPNModule: RCTEventEmitter {
         }
     }
 
-    private func updateSharedBlacklist(add domain: String? = nil, remove: String? = nil) {
+    private func updateSharedBlacklist(add addDomain: String? = nil, remove removeDomain: String? = nil) {
         guard let sharedDefaults = UserDefaults(suiteName: appGroupIdentifier) else { return }
 
         var blacklist = sharedDefaults.array(forKey: "blacklist") as? [String] ?? []
 
-        if let domain = add {
+        if let domain = addDomain {
             if !blacklist.contains(domain) {
                 blacklist.append(domain)
             }
-        } else if let domain = remove {
+        } else if let domain = removeDomain {
             blacklist.removeAll { $0 == domain }
         }
 
@@ -310,16 +416,16 @@ class DNSVPNModule: RCTEventEmitter {
         sharedDefaults.synchronize()
     }
 
-    private func updateSharedWhitelist(add domain: String? = nil, remove: String? = nil) {
+    private func updateSharedWhitelist(add addDomain: String? = nil, remove removeDomain: String? = nil) {
         guard let sharedDefaults = UserDefaults(suiteName: appGroupIdentifier) else { return }
 
         var whitelist = sharedDefaults.array(forKey: "whitelist") as? [String] ?? []
 
-        if let domain = add {
+        if let domain = addDomain {
             if !whitelist.contains(domain) {
                 whitelist.append(domain)
             }
-        } else if let domain = remove {
+        } else if let domain = removeDomain {
             whitelist.removeAll { $0 == domain }
         }
 

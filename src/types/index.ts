@@ -3,7 +3,7 @@ export interface DnsLog {
   domain: string;
   timestamp: string;
   status: 'allowed' | 'blocked';
-  category: 'tracker' | 'ad' | 'content' | 'unknown';
+  category: string;  // Now stores resolved IP address, "已拦截", or "解析失败"
   latency: number;
 }
 

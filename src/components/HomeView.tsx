@@ -3,14 +3,13 @@ import { View, Text, TouchableOpacity, StyleSheet, Animated, ScrollView } from '
 import Icon from 'react-native-vector-icons/Feather';
 import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { responsive, getCardPadding, getPagePadding, scaleWidth, scaleHeight, responsiveValue } from '../utils/responsive';
+import { responsive, getPagePadding, scaleWidth, scaleHeight, responsiveValue } from '../utils/responsive';
 import { useApp } from '../contexts/AppContext';
-import { DNS_PROVIDERS } from '../constants';
 
 export const HomeView: React.FC = () => {
   // Hook顺序很重要！useSafeAreaInsets使用useContext，必须在所有其他hooks之前
   const insets = useSafeAreaInsets();
-  const { isConnected, setIsConnected, todayStatistics, settings } = useApp();
+  const { isConnected, setIsConnected, todayStatistics } = useApp();
 
   const [scaleAnim] = useState(new Animated.Value(1));
   const [glowAnim] = useState(new Animated.Value(0));
@@ -59,6 +58,7 @@ export const HomeView: React.FC = () => {
         useNativeDriver: true,
       }),
     ]).start();
+
     try {
       await setIsConnected(!isConnected);
     } catch (error) {
@@ -88,14 +88,6 @@ export const HomeView: React.FC = () => {
       ]}
       showsVerticalScrollIndicator={false}
     >
-      {/* Demo Data Disclaimer Banner */}
-      <View style={styles.demoBanner}>
-        <Icon name="info" size={16} color="#06b6d4" />
-        <Text style={styles.demoText}>
-          本应用为网络安全教育工具，数据为演示示例
-        </Text>
-      </View>
-
       {/* Status Card */}
       <View style={styles.statusCard}>
         <View style={[
@@ -243,27 +235,6 @@ export const HomeView: React.FC = () => {
           </View>
         </View>
       </View>
-
-      {/* DNS Provider Info */}
-      <View style={styles.providerSection}>
-        <Text style={styles.sectionTitle}>当前服务</Text>
-        <View style={styles.providerCard}>
-          <Icon
-            name={DNS_PROVIDERS.find(p => p.id === settings.selectedDnsProvider)?.icon as any || 'globe'}
-            size={28}
-            color="#06b6d4"
-          />
-          <View style={styles.providerInfo}>
-            <Text style={styles.providerName} numberOfLines={1}>
-              {DNS_PROVIDERS.find(p => p.id === settings.selectedDnsProvider)?.name || 'AdGuard DNS'}
-            </Text>
-            <Text style={styles.providerMeta} numberOfLines={1}>
-              {DNS_PROVIDERS.find(p => p.id === settings.selectedDnsProvider)?.description || '家庭安全DNS'}
-            </Text>
-          </View>
-          <Icon name="chevron-right" size={20} color="#64748b" />
-        </View>
-      </View>
     </ScrollView>
   );
 };
@@ -275,23 +246,6 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: getPagePadding(),
     // paddingTop 在 contentContainerStyle 中动态设置（包含安全区域）
-  },
-  demoBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(6, 182, 212, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.3)',
-    borderRadius: responsive.borderRadius.lg,
-    padding: responsive.spacing.md,
-    marginBottom: responsive.spacing.lg,
-  },
-  demoText: {
-    flex: 1,
-    fontSize: responsive.fontSize.xs,
-    color: '#06b6d4',
-    marginLeft: responsive.spacing.sm,
-    lineHeight: responsive.fontSize.xs * 1.4,
   },
   statusCard: {
     flexDirection: 'row',
@@ -521,31 +475,5 @@ const styles = StyleSheet.create({
     width: 1,
     height: scaleHeight(40),
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
-  },
-  providerSection: {
-    marginBottom: responsive.spacing['3xl'],
-  },
-  providerCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.4)',
-    borderRadius: responsive.borderRadius.lg,
-    padding: responsive.spacing.lg,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    gap: responsive.spacing.md,
-  },
-  providerInfo: {
-    flex: 1,
-  },
-  providerName: {
-    fontSize: responsive.fontSize.lg,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 2,
-  },
-  providerMeta: {
-    fontSize: responsive.fontSize.sm,
-    color: '#64748b',
   },
 });

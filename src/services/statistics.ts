@@ -34,26 +34,27 @@ export const calculateStatistics = (logs: DnsLog[]): Statistics => {
   };
 };
 
-// 生成24小时图表数据
+// 生成24小时图表数据（每4小时一个点，共6个点）
 export const generateChartData = (logs: DnsLog[]): ChartDataPoint[] => {
   const now = new Date();
   const chartData: ChartDataPoint[] = [];
+  const interval = 4; // 每4小时一个点
 
-  // 生成过去24小时的时间点（每小时一个点）
-  for (let i = 23; i >= 0; i--) {
+  // 生成过去24小时的时间点（每4小时一个点）
+  for (let i = 24; i >= 0; i -= interval) {
     const hourDate = new Date(now);
     hourDate.setHours(now.getHours() - i, 0, 0, 0);
-    const nextHour = new Date(hourDate);
-    nextHour.setHours(hourDate.getHours() + 1);
+    const nextPeriod = new Date(hourDate);
+    nextPeriod.setHours(hourDate.getHours() + interval);
 
     // 计算该时间段内的日志
-    const logsInHour = logs.filter(log => {
+    const logsInPeriod = logs.filter(log => {
       const logDate = new Date(log.timestamp);
-      return logDate >= hourDate && logDate < nextHour;
+      return logDate >= hourDate && logDate < nextPeriod;
     });
 
-    const blocked = logsInHour.filter(log => log.status === 'blocked').length;
-    const allowed = logsInHour.filter(log => log.status === 'allowed').length;
+    const blocked = logsInPeriod.filter(log => log.status === 'blocked').length;
+    const allowed = logsInPeriod.filter(log => log.status === 'allowed').length;
 
     chartData.push({
       time: formatChartTime(hourDate),
