@@ -895,7 +895,8 @@ class DNSVpnService : VpnService() {
                 socket.send(requestPacket)
 
                 // Receive response
-                val responseBuffer = ByteArray(512)
+                // Using 1472 bytes to support EDNS responses (1500 MTU - 28 IP/UDP headers)
+                val responseBuffer = ByteArray(1472)
                 val responsePacket = DatagramPacket(responseBuffer, responseBuffer.size)
                 socket.receive(responsePacket)
                 socket.close()
@@ -921,6 +922,7 @@ class DNSVpnService : VpnService() {
     }
 
     /// Build DNS query packet for A record
+    /// Now includes EDNS(0) OPT record for modern DNS support
     private fun buildDNSQueryPacket(hostname: String): ByteArray {
         val buffer = mutableListOf<Byte>()
 
@@ -930,7 +932,7 @@ class DNSVpnService : VpnService() {
         buffer.addAll(listOf(0x00, 0x01))  // Questions: 1
         buffer.addAll(listOf(0x00, 0x00))  // Answer RRs: 0
         buffer.addAll(listOf(0x00, 0x00))  // Authority RRs: 0
-        buffer.addAll(listOf(0x00, 0x00))  // Additional RRs: 0
+        buffer.addAll(listOf(0x00, 0x01))  // Additional RRs: 1 (for EDNS OPT record)
 
         // Query: QNAME (domain name)
         val labels = hostname.split(".")
@@ -944,6 +946,21 @@ class DNSVpnService : VpnService() {
         buffer.addAll(listOf(0x00, 0x01))
         // QCLASS: IN (Internet)
         buffer.addAll(listOf(0x00, 0x01))
+
+        // Additional section - EDNS(0) OPT pseudo-record
+        // NAME: root domain (1 byte)
+        buffer.add(0x00)
+        // TYPE: OPT (41) (2 bytes)
+        buffer.addAll(listOf(0x00, 0x29))
+        // CLASS: UDP payload size - 1232 bytes (2 bytes)
+        // Using 1232 as recommended by RFC 8467 to avoid fragmentation
+        buffer.addAll(listOf(0x04, 0xD0.toByte()))
+        // TTL: Extended RCODE and flags (4 bytes)
+        // Extended RCODE: 0, Version: 0, DO bit: 0, Z: 0
+        buffer.addAll(listOf(0x00, 0x00, 0x00, 0x00))
+        // RDLENGTH: 0 (no additional data) (2 bytes)
+        buffer.addAll(listOf(0x00, 0x00))
+        // RDATA: empty
 
         return buffer.map { it.toByte() }.toByteArray()
     }
@@ -1018,7 +1035,8 @@ class UDPConnectionPool(private val poolSize: Int = 3) {
             socket.send(requestPacket)
 
             // Receive response
-            val responseBuffer = ByteArray(512)
+            // Using 1472 bytes to support EDNS responses (1500 MTU - 28 IP/UDP headers)
+            val responseBuffer = ByteArray(1472)
             val responsePacket = DatagramPacket(responseBuffer, responseBuffer.size)
             socket.receive(responsePacket)
 

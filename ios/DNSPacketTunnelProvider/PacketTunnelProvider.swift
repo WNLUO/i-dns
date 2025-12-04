@@ -957,6 +957,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     /// Create a DNS query packet for a given domain and query type
     /// This is used for CNAME recursive resolution
+    /// Now includes EDNS(0) OPT record for modern DNS support
     private func createDNSQueryPacket(domain: String, queryType: UInt16) -> Data {
         var packet = Data()
 
@@ -971,8 +972,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         packet.append(contentsOf: [0x00, 0x00])
         // Authority RRs (2 bytes)
         packet.append(contentsOf: [0x00, 0x00])
-        // Additional RRs (2 bytes)
-        packet.append(contentsOf: [0x00, 0x00])
+        // Additional RRs (2 bytes) - now 1 for EDNS OPT record
+        packet.append(contentsOf: [0x00, 0x01])
 
         // Question section
         // Domain name (labels)
@@ -989,6 +990,21 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         // Query class (2 bytes) - IN (Internet)
         packet.append(contentsOf: [0x00, 0x01])
+
+        // Additional section - EDNS(0) OPT pseudo-record
+        // NAME: root domain (1 byte)
+        packet.append(0x00)
+        // TYPE: OPT (41) (2 bytes)
+        packet.append(contentsOf: [0x00, 0x29])
+        // CLASS: UDP payload size - 1232 bytes (2 bytes)
+        // Using 1232 as recommended by RFC 8467 to avoid fragmentation
+        packet.append(contentsOf: [0x04, 0xD0])
+        // TTL: Extended RCODE and flags (4 bytes)
+        // Extended RCODE: 0, Version: 0, DO bit: 0, Z: 0
+        packet.append(contentsOf: [0x00, 0x00, 0x00, 0x00])
+        // RDLENGTH: 0 (no additional data) (2 bytes)
+        packet.append(contentsOf: [0x00, 0x00])
+        // RDATA: empty
 
         return packet
     }
@@ -2349,7 +2365,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     }
 
                     // Receive DNS response
-                    connection.receive(minimumIncompleteLength: 1, maximumLength: 512) { content, _, _, error in
+                    // Using 1472 bytes (1500 MTU - 28 IP/UDP headers) to support EDNS responses
+                    connection.receive(minimumIncompleteLength: 1, maximumLength: 1472) { content, _, _, error in
                         timeoutWorkItem.cancel()
                         connection.cancel()
 
