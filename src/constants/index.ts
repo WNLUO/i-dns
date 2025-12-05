@@ -1,13 +1,143 @@
-import { DnsProvider, LogRetentionPeriod } from '../types';
+import { DnsProvider, DnsServerConfig, LogRetentionPeriod } from '../types';
 
-// DNS 服务商配置 - 只保留 I-DNS
+// DNS 服务商配置
 export const DNS_PROVIDERS: DnsProvider[] = [
-  { id: 'idns', name: 'I-DNS', description: '自定义儿童上网保护策略', icon: 'settings' },
+  // 自有服务
+  {
+    id: 'idns',
+    name: 'I-DNS',
+    description: '自定义儿童上网保护策略',
+    icon: 'shield',
+    region: 'global',
+    protocols: ['doh'],
+    features: ['儿童保护', '自定义规则', '云端同步']
+  },
+
+  // 国内服务商
+  {
+    id: 'dnspod',
+    name: '腾讯DNS',
+    description: '国内首家支持ECS，稳定快速',
+    icon: 'zap',
+    region: 'china',
+    protocols: ['doh', 'dot', 'udp'],
+    features: ['EDNS', 'IPv6', 'BGP Anycast']
+  },
+  {
+    id: 'alidns',
+    name: '阿里DNS',
+    description: '全国CDN网络，智能解析',
+    icon: 'globe',
+    region: 'china',
+    protocols: ['doh', 'dot', 'udp'],
+    features: ['EDNS', 'IPv6', 'CDN加速']
+  },
+  {
+    id: 'baidu',
+    name: '百度DNS',
+    description: '快速稳定，智能拦截恶意网站',
+    icon: 'search',
+    region: 'china',
+    protocols: ['udp'],
+    features: ['IPv6', '恶意拦截']
+  },
+  {
+    id: '114dns',
+    name: '114DNS',
+    description: '纯净无劫持，高解析成功率',
+    icon: 'check-circle',
+    region: 'china',
+    protocols: ['udp'],
+    features: ['纯净', '防劫持']
+  },
+  {
+    id: '360dns',
+    name: '360DNS',
+    description: '安全防护，反钓鱼网站',
+    icon: 'lock',
+    region: 'china',
+    protocols: ['doh', 'dot', 'udp'],
+    features: ['安全防护', '反钓鱼']
+  },
+
+  // 国际服务商
+  {
+    id: 'cloudflare',
+    name: 'Cloudflare',
+    description: '全球最快的DNS服务',
+    icon: 'cloud',
+    region: 'global',
+    protocols: ['doh', 'udp'],
+    features: ['隐私保护', '全球CDN']
+  },
+  {
+    id: 'google',
+    name: 'Google DNS',
+    description: '稳定可靠的公共DNS',
+    icon: 'globe',
+    region: 'global',
+    protocols: ['doh', 'udp'],
+    features: ['稳定', 'IPv6']
+  }
 ];
 
-// DNS 服务商配置映射（包括DoH支持）
-export const DNS_SERVER_MAP: Record<string, { type: 'udp' | 'doh', server: string }> = {
-  'idns': { type: 'doh', server: 'https://i-dns.wnluo.com/dns-query' },
+// DNS 服务商配置映射
+export const DNS_SERVER_MAP: Record<string, DnsServerConfig> = {
+  'idns': {
+    doh: 'https://i-dns.wnluo.com/dns-query',
+    priority: 1,
+    fallback: 'dnspod',
+    supportsEDNS: true
+  },
+  'dnspod': {
+    doh: 'https://doh.pub/dns-query',
+    dot: 'dot.pub',
+    udp: '119.29.29.29',
+    priority: 1,
+    fallback: 'alidns',
+    supportsEDNS: true
+  },
+  'alidns': {
+    doh: 'https://dns.alidns.com/dns-query',
+    dot: 'dns.alidns.com',
+    udp: '223.5.5.5',
+    priority: 1,
+    fallback: 'baidu',
+    supportsEDNS: true
+  },
+  'baidu': {
+    udp: '180.76.76.76',
+    priority: 2,
+    fallback: '114dns',
+    supportsEDNS: true
+  },
+  '114dns': {
+    udp: '114.114.114.114',
+    priority: 2,
+    fallback: '360dns',
+    supportsEDNS: false
+  },
+  '360dns': {
+    doh: 'https://doh.360.cn',
+    dot: 'dot.360.cn',
+    udp: '101.226.4.6',
+    priority: 2,
+    fallback: 'cloudflare',
+    supportsEDNS: false
+  },
+  'cloudflare': {
+    doh: 'https://cloudflare-dns.com/dns-query',
+    udp: '1.1.1.1',
+    priority: 3,
+    fallback: 'google',
+    supportsEDNS: true
+  },
+  'google': {
+    doh: 'https://dns.google/dns-query',
+    udp: '8.8.8.8',
+    priority: 3,
+    supportsEDNS: true
+  }
 };
 
 // 日志保留时间选项配置

@@ -4,9 +4,8 @@ import { LineChart } from 'react-native-chart-kit';
 import Icon from 'react-native-vector-icons/Feather';
 import { CircularProgress } from './CircularProgress';
 import { useApp } from '../contexts/AppContext';
-import { getCategoryBreakdown } from '../services/statistics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { responsive, getCardPadding, getPagePadding, screenWidth } from '../utils/responsive';
+import { responsive, getCardPadding, getPagePadding, screenWidth, formatNumber, formatLatency } from '../utils/responsive';
 
 export const StatsView: React.FC = () => {
   // Hook顺序很重要！useContext hooks必须在最前面
@@ -14,8 +13,6 @@ export const StatsView: React.FC = () => {
   const { statistics, logs } = useApp();
 
   const [selectedPeriod] = useState('today');
-
-  const categoryBreakdown = useMemo(() => getCategoryBreakdown(logs), [logs]);
 
   const chartData = useMemo(() => {
     const hasData = statistics.chartData.length > 0;
@@ -59,15 +56,6 @@ export const StatsView: React.FC = () => {
     fillShadowGradientToOpacity: 0.05,
   };
 
-  const categories = categoryBreakdown.map(cat => ({
-    name: cat.name,
-    value: cat.percentage,
-    color: cat.color,
-    icon: cat.name === '追踪器' ? 'eye-off' :
-          cat.name === '广告' ? 'alert-circle' :
-          cat.name === '恶意内容' ? 'shield' : 'filter',
-  }));
-
   return (
     <ScrollView
       style={styles.container}
@@ -78,6 +66,7 @@ export const StatsView: React.FC = () => {
           paddingBottom: Math.max(insets.bottom, 20) + 100,
         }
       ]}
+      showsVerticalScrollIndicator={false}
     >
       {/* Header */}
       <View style={styles.header}>
@@ -89,7 +78,7 @@ export const StatsView: React.FC = () => {
       <View style={styles.summaryRow}>
         <View style={styles.summaryCard}>
           <Text style={styles.summaryNumber}>
-            {statistics.totalRequests.toLocaleString()}
+            {formatNumber(statistics.totalRequests)}
           </Text>
           <Text style={styles.summaryLabel}>总请求数</Text>
         </View>
@@ -129,33 +118,6 @@ export const StatsView: React.FC = () => {
         </View>
       </View>
 
-      {/* Category Breakdown */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>拦截分类</Text>
-
-        <View style={styles.categoriesGrid}>
-          {categories.map((category, index) => (
-            <View key={index} style={styles.categoryCard}>
-              <Icon name={category.icon} size={24} color={category.color} />
-              <View style={styles.categoryInfo}>
-                <Text style={styles.categoryName}>{category.name}</Text>
-                <View style={styles.categoryStats}>
-                  <Text style={styles.categoryPercent}>{category.value}%</Text>
-                  <View style={styles.categoryBar}>
-                    <View
-                      style={[
-                        styles.categoryBarFill,
-                        { width: `${category.value}%`, backgroundColor: category.color },
-                      ]}
-                    />
-                  </View>
-                </View>
-              </View>
-            </View>
-          ))}
-        </View>
-      </View>
-
       {/* Protection Rate Circle */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>守护效率</Text>
@@ -180,7 +142,7 @@ export const StatsView: React.FC = () => {
         <View style={styles.quickStatItem}>
           <Icon name="shield-off" size={24} color="#10b981" />
           <Text style={styles.quickStatNumber}>
-            {statistics.blockedRequests.toLocaleString()}
+            {formatNumber(statistics.blockedRequests)}
           </Text>
           <Text style={styles.quickStatLabel}>已拦截</Text>
         </View>
@@ -188,7 +150,7 @@ export const StatsView: React.FC = () => {
         <View style={[styles.quickStatItem, { backgroundColor: 'rgba(59, 130, 246, 0.1)' }]}>
           <Icon name="check-circle" size={24} color="#3b82f6" />
           <Text style={styles.quickStatNumber}>
-            {statistics.allowedRequests.toLocaleString()}
+            {formatNumber(statistics.allowedRequests)}
           </Text>
           <Text style={styles.quickStatLabel}>安全访问</Text>
         </View>
@@ -196,7 +158,12 @@ export const StatsView: React.FC = () => {
         <View style={[styles.quickStatItem, { backgroundColor: 'rgba(139, 92, 246, 0.1)' }]}>
           <Icon name="clock" size={24} color="#8b5cf6" />
           <Text style={styles.quickStatNumber}>
-            {statistics.averageLatency > 0 ? `${Math.round(statistics.averageLatency)}ms` : '--'}
+            {statistics.averageLatency > 0
+              ? (() => {
+                  const latency = formatLatency(statistics.averageLatency);
+                  return `${latency.value}${latency.unit}`;
+                })()
+              : '--'}
           </Text>
           <Text style={styles.quickStatLabel}>平均延迟</Text>
         </View>
@@ -238,17 +205,21 @@ const styles = StyleSheet.create({
     padding: 20,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.05)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   summaryNumber: {
     fontSize: 28,
     fontWeight: '700',
     color: '#fff',
     marginBottom: 4,
+    textAlign: 'center',
   },
   summaryLabel: {
     fontSize: 12,
     color: '#94a3b8',
     marginBottom: 8,
+    textAlign: 'center',
   },
   summaryTrend: {
     flexDirection: 'row',
@@ -296,50 +267,6 @@ const styles = StyleSheet.create({
   chart: {
     marginVertical: 0,
     borderRadius: 16,
-  },
-  categoriesGrid: {
-    gap: 12,
-  },
-  categoryCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.5)',
-    borderRadius: 16,
-    padding: 16,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-  },
-  categoryInfo: {
-    flex: 1,
-  },
-  categoryName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 8,
-  },
-  categoryStats: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  categoryPercent: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#06b6d4',
-    minWidth: 40,
-  },
-  categoryBar: {
-    flex: 1,
-    height: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 3,
-    overflow: 'hidden',
-  },
-  categoryBarFill: {
-    height: '100%',
-    borderRadius: 3,
   },
   circleCard: {
     backgroundColor: 'rgba(15, 23, 42, 0.5)',

@@ -1,11 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import Icon from 'react-native-vector-icons/Feather';
 import { LOG_RETENTION_OPTIONS } from '../constants';
 import { useApp } from '../contexts/AppContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { responsive, getPagePadding } from '../utils/responsive';
-import { DnsProviderLogo } from './DnsProviderLogo';
+import { DNSProviderSelector } from './DNSProviderSelector';
+import { DNSAdvancedSettings } from './DNSAdvancedSettings';
 
 interface SettingsViewProps {
   onNavigate?: (page: 'user-agreement' | 'privacy-policy' | 'child-protection' | 'tutorial') => void;
@@ -14,6 +15,17 @@ interface SettingsViewProps {
 export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigate }) => {
   const insets = useSafeAreaInsets();
   const { settings, updateSettings, logs, clearLogs } = useApp();
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+
+  if (showAdvancedSettings) {
+    return (
+      <DNSAdvancedSettings
+        settings={settings}
+        onUpdateSettings={updateSettings}
+        onBack={() => setShowAdvancedSettings(false)}
+      />
+    );
+  }
 
 
   return (
@@ -26,6 +38,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigate }) => {
           paddingBottom: Math.max(insets.bottom, 20) + 100,
         }
       ]}
+      showsVerticalScrollIndicator={false}
     >
       {/* Header */}
       <View style={styles.header}>
@@ -33,30 +46,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigate }) => {
         <Text style={styles.subtitle}>个性化您的家庭网络守护体验</Text>
       </View>
 
-      {/* DNS Provider Section - 只显示I-DNS信息 */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Icon name="server" size={18} color="#06b6d4" />
-          <Text style={styles.sectionTitle}>DNS 服务商</Text>
-        </View>
-
-        <View style={styles.providersContainer}>
-          <View
-            style={[
-              styles.providerCard,
-              { backgroundColor: 'rgba(6, 182, 212, 0.15)' },
-              styles.providerCardActive,
-            ]}
-          >
-            <DnsProviderLogo providerId="idns" size={48} />
-            <View style={styles.providerInfo}>
-              <Text style={styles.providerName}>I-DNS</Text>
-              <Text style={styles.providerDesc}>自定义儿童上网保护策略</Text>
-            </View>
-            <Icon name="check-circle" size={22} color="#06b6d4" />
-          </View>
-        </View>
-      </View>
+      {/* DNS Provider Selector */}
+      <DNSProviderSelector
+        selectedProviderId={settings.selectedDnsProvider}
+        onSelectProvider={(providerId) => updateSettings({ selectedDnsProvider: providerId })}
+        onAdvancedSettings={() => setShowAdvancedSettings(true)}
+      />
 
       {/* Data Settings */}
       <View style={styles.section}>
@@ -120,7 +115,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigate }) => {
               <Icon name="trash-2" size={20} color="#ef4444" />
               <View style={styles.settingInfo}>
                 <Text style={styles.settingTitle}>清除所有日志</Text>
-                <Text style={styles.settingDesc}>已保存 {logs.length} 条记录</Text>
               </View>
               <Icon name="chevron-right" size={20} color="#64748b" />
             </View>
@@ -178,15 +172,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigate }) => {
           </TouchableOpacity>
         </View>
       </View>
-
-      {/* About Section - 版本信息放在最下面 */}
-      <View style={styles.aboutCard}>
-        <Icon name="info" size={24} color="#06b6d4" />
-        <View style={styles.aboutInfo}>
-          <Text style={styles.aboutTitle}>iDNS 家庭守护</Text>
-          <Text style={styles.aboutVersion}>版本 1.0.0</Text>
-        </View>
-      </View>
     </ScrollView>
   );
 };
@@ -225,35 +210,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#fff',
   },
-  providersContainer: {
-    gap: 12,
-  },
-  providerCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-    gap: 12,
-  },
-  providerCardActive: {
-    borderColor: 'rgba(6, 182, 212, 0.3)',
-  },
-  providerInfo: {
-    flex: 1,
-  },
-  providerName: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 2,
-  },
-  providerDesc: {
-    fontSize: 12,
-    color: '#94a3b8',
-  },
   settingsCard: {
     backgroundColor: 'rgba(15, 23, 42, 0.5)',
     borderRadius: 16,
@@ -284,29 +240,6 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: 'rgba(255, 255, 255, 0.05)',
     marginVertical: 12,
-  },
-  aboutCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(6, 182, 212, 0.1)',
-    borderRadius: 16,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-    gap: 16,
-  },
-  aboutInfo: {
-    flex: 1,
-  },
-  aboutTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 2,
-  },
-  aboutVersion: {
-    fontSize: 13,
-    color: '#94a3b8',
   },
   legalSection: {
     backgroundColor: 'rgba(15, 23, 42, 0.5)',

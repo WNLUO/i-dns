@@ -177,6 +177,7 @@ struct DNSConfig {
             let type: DNSServer.ServerType
             switch typeString {
             case "doh": type = .doh
+            case "dot": type = .dot
             case "udp": type = .udp
             case "direct": type = .direct
             default: return nil

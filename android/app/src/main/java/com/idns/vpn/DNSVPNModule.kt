@@ -66,12 +66,13 @@ class DNSVPNModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
     @ReactMethod
     fun startVPN(promise: Promise) {
         try {
-            val intent = VpnService.prepare(currentActivity)
+            val activity = reactApplicationContext.currentActivity
+            val intent = VpnService.prepare(activity)
 
             if (intent != null) {
                 // Need to request VPN permission
-                currentActivity?.let { activity ->
-                    activity.startActivityForResult(intent, VPN_PERMISSION_REQUEST_CODE)
+                activity?.let {
+                    it.startActivityForResult(intent, VPN_PERMISSION_REQUEST_CODE)
 
                     // Wait for permission result
                     // In a real implementation, you would use onActivityResult callback

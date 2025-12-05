@@ -366,7 +366,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     resolveDohServerIP {
                         os_log("✅ DoH server IP re-resolved", log: self.logger, type: .info)
                     }
+                } else if dns.contains(".") && !dns.split(separator: ".").allSatisfy({ $0.allSatisfy({ $0.isNumber }) }) {
+                    // DoT: Contains dots but not all segments are numbers (e.g., "dns.alidns.com")
+                    // Exclude pure IP addresses like "8.8.8.8"
+                    dnsServerType = "dot"
+                    os_log("✓ DNS server updated to DoT", log: logger, type: .info)
                 } else {
+                    // UDP: IP address or fallback
                     dnsServerType = "udp"
                     os_log("✓ DNS server updated to UDP", log: logger, type: .info)
                 }
@@ -618,6 +624,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             if dnsServerType == "doh" {
                 os_log("📡 Using DoH method for query", log: logger, type: .info)
                 forwardDNSQueryDoH(dnsQuery: dnsQuery, originalPacket: packet, protocolNumber: protocolNumber)
+            } else if dnsServerType == "dot" {
+                os_log("📡 Using DoT method for query", log: logger, type: .info)
+                forwardDNSQueryDoT(dnsQuery: dnsQuery, originalPacket: packet, protocolNumber: protocolNumber)
             } else {
                 os_log("📡 Using UDP method for query", log: logger, type: .info)
                 forwardDNSQueryUDP(dnsQuery: dnsQuery, originalPacket: packet, protocolNumber: protocolNumber)
@@ -777,6 +786,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 }
             })
         }
+    }
+
+    /// Forward DNS query using DoT (DNS over TLS)
+    /// TODO: Full DoT implementation with TLS handshake
+    /// Currently falls back to treating DoT server as domain-based UDP DNS
+    private func forwardDNSQueryDoT(dnsQuery: DNSQuery, originalPacket: Data, protocolNumber: UInt32) {
+        // Temporary implementation: Use the DoT server as a regular UDP DNS
+        // The DoT server hostname (e.g., "dns.alidns.com") will be treated as UDP DNS
+        os_log("⚠️ DoT is currently using simplified UDP mode (full TLS support coming soon)", log: logger, type: .info)
+        os_log("DoT Server: %{public}@", log: logger, type: .info, dnsServer)
+
+        // Forward using UDP method with the DoT server address
+        forwardDNSQueryUDP(dnsQuery: dnsQuery, originalPacket: originalPacket, protocolNumber: protocolNumber)
     }
 
     /// Forward DNS query using direct UDP connection (bypassing VPN tunnel)

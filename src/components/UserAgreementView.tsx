@@ -29,6 +29,7 @@ export const UserAgreementView: React.FC<UserAgreementViewProps> = ({ onClose })
           styles.contentContainer,
           { paddingBottom: Math.max(insets.bottom, 20) + 20 }
         ]}
+        showsVerticalScrollIndicator={false}
       >
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>欢迎使用iDNS家庭守护</Text>

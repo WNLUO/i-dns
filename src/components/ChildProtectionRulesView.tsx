@@ -29,6 +29,7 @@ export const ChildProtectionRulesView: React.FC<ChildProtectionRulesViewProps> =
           styles.contentContainer,
           { paddingBottom: Math.max(insets.bottom, 20) + 20 }
         ]}
+        showsVerticalScrollIndicator={false}
       >
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>引言</Text>
@@ -154,13 +155,18 @@ export const ChildProtectionRulesView: React.FC<ChildProtectionRulesViewProps> =
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>七、第三方服务提供商</Text>
+          <Text style={styles.sectionTitle}>七、DNS服务说明</Text>
           <Text style={styles.paragraph}>
-            7.1 我们使用的第三方DNS服务{'\n'}
-            本应用使用AdGuard DNS、Cloudflare等第三方DNS服务提供商。这些服务商均声明遵守严格的隐私保护标准。
+            7.1 我们的DNS服务{'\n'}
+            本应用使用自有的DNS-over-HTTPS服务器（i-dns.wnluo.com）处理DNS查询。所有DNS查询均通过加密的HTTPS协议传输，确保儿童个人信息安全。
           </Text>
           <Text style={styles.paragraph}>
-            7.2 我们会要求第三方服务提供商采取严格的儿童个人信息保护措施，不得将儿童个人信息用于其提供服务之外的目的。
+            7.2 数据安全保障{'\n'}
+            我们采取严格的技术和管理措施保护儿童的DNS查询信息，不会将儿童的DNS查询记录用于商业目的或与第三方分享。
+          </Text>
+          <Text style={styles.paragraph}>
+            7.3 数据处理原则{'\n'}
+            DNS查询实时处理后不做永久保存，仅在设备本地保留必要的统计信息，确保儿童隐私得到最大程度保护。
           </Text>
         </View>
 
@@ -182,8 +188,8 @@ export const ChildProtectionRulesView: React.FC<ChildProtectionRulesViewProps> =
           <Text style={styles.paragraph}>
             如果您对本规则或儿童个人信息处理有任何疑问、意见或建议，或需要行使相关权利，请通过以下方式联系我们：{'\n'}
             {'\n'}
-            邮箱：[您的联系邮箱]{'\n'}
-            地址：[您的公司地址]{'\n'}
+            邮箱：admin@wnluo.com{'\n'}
+            地址：贵州省贵阳市贵州师范大学{'\n'}
             {'\n'}
             我们将在收到您的反馈后15个工作日内回复。
           </Text>

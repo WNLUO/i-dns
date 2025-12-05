@@ -29,6 +29,7 @@ export const PrivacyPolicyView: React.FC<PrivacyPolicyViewProps> = ({ onClose })
           styles.contentContainer,
           { paddingBottom: Math.max(insets.bottom, 20) + 20 }
         ]}
+        showsVerticalScrollIndicator={false}
       >
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>引言</Text>

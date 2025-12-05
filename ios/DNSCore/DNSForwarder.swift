@@ -14,6 +14,7 @@ import os.log
 struct DNSServer {
     enum ServerType {
         case doh       // DNS over HTTPS
+        case dot       // DNS over TLS
         case udp       // Traditional UDP DNS
         case direct    // Direct UDP to specific IP
     }
@@ -132,6 +133,130 @@ class DoHForwarder: DNSForwarder {
     func cancel() {
         currentTask?.cancel()
         currentTask = nil
+    }
+}
+
+// MARK: - DoT Forwarder
+class DoTForwarder: DNSForwarder {
+
+    private let server: DNSServer
+    private let logger = OSLog(subsystem: "com.idns.dns", category: "DoTForwarder")
+
+    private var connection: NWConnection?
+    private var connectionVersion: Int = 0
+    private let connectionLock = NSLock()
+
+    init(server: DNSServer) {
+        self.server = server
+    }
+
+    func forward(query: DNSQuery, completion: @escaping (ForwardResult) -> Void) {
+        let startTime = Date()
+
+        // Parse server address (format: "dns.example.com" or "dns.example.com:853")
+        let components = server.url.split(separator: ":")
+        let host = String(components[0])
+        let port = components.count > 1 ? UInt16(components[1]) ?? 853 : 853
+
+        // Create or reuse connection
+        connectionLock.lock()
+        let currentVersion = connectionVersion
+
+        if connection == nil || connection?.state == .cancelled || connection?.state == .failed {
+            let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!)
+
+            // Create TLS parameters
+            let tlsOptions = NWProtocolTLS.Options()
+
+            // Create TCP with TLS
+            let tcpOptions = NWProtocolTCP.Options()
+            let parameters = NWParameters(tls: tlsOptions, tcp: tcpOptions)
+
+            connection = NWConnection(to: endpoint, using: parameters)
+            connectionVersion += 1
+
+            connection?.stateUpdateHandler = { [weak self] state in
+                guard let self = self else { return }
+                os_log("DoT connection state: %{public}@", log: self.logger, type: .debug, "\(state)")
+            }
+
+            connection?.start(queue: .global(qos: .userInitiated))
+        }
+
+        guard let connection = connection, currentVersion == connectionVersion else {
+            connectionLock.unlock()
+            let error = NSError(domain: "DoTForwarder", code: -1, userInfo: [NSLocalizedDescriptionKey: "Connection unavailable"])
+            completion(ForwardResult(response: nil, latency: 0, error: error, server: server))
+            return
+        }
+        connectionLock.unlock()
+
+        // DNS over TLS requires a 2-byte length prefix
+        var queryData = Data()
+        let length = UInt16(query.packet.count).bigEndian
+        queryData.append(contentsOf: withUnsafeBytes(of: length) { Data($0) })
+        queryData.append(query.packet)
+
+        // Send query
+        connection.send(content: queryData, completion: .contentProcessed { [weak self] error in
+            guard let self = self else { return }
+
+            if let error = error {
+                os_log("DoT send failed: %{public}@", log: self.logger, type: .error, error.localizedDescription)
+                let latency = Date().timeIntervalSince(startTime)
+                completion(ForwardResult(response: nil, latency: latency, error: error, server: self.server))
+                return
+            }
+
+            // First, receive the 2-byte length prefix
+            connection.receive(minimumIncompleteLength: 2, maximumLength: 2) { lengthData, _, _, error in
+                if let error = error {
+                    os_log("DoT length receive failed: %{public}@", log: self.logger, type: .error, error.localizedDescription)
+                    let latency = Date().timeIntervalSince(startTime)
+                    completion(ForwardResult(response: nil, latency: latency, error: error, server: self.server))
+                    return
+                }
+
+                guard let lengthData = lengthData, lengthData.count == 2 else {
+                    let error = NSError(domain: "DoTForwarder", code: -2, userInfo: [NSLocalizedDescriptionKey: "Invalid length prefix"])
+                    let latency = Date().timeIntervalSince(startTime)
+                    completion(ForwardResult(response: nil, latency: latency, error: error, server: self.server))
+                    return
+                }
+
+                // Parse length
+                let length = lengthData.withUnsafeBytes { $0.load(as: UInt16.self).bigEndian }
+
+                // Receive the actual DNS response
+                connection.receive(minimumIncompleteLength: Int(length), maximumLength: Int(length)) { responseData, _, _, error in
+                    let latency = Date().timeIntervalSince(startTime)
+
+                    if let error = error {
+                        os_log("DoT response receive failed: %{public}@", log: self.logger, type: .error, error.localizedDescription)
+                        completion(ForwardResult(response: nil, latency: latency, error: error, server: self.server))
+                        return
+                    }
+
+                    guard let responseData = responseData, !responseData.isEmpty else {
+                        let error = NSError(domain: "DoTForwarder", code: -3, userInfo: [NSLocalizedDescriptionKey: "Empty response"])
+                        completion(ForwardResult(response: nil, latency: latency, error: error, server: self.server))
+                        return
+                    }
+
+                    os_log("DoT query succeeded in %.0fms", log: self.logger, type: .debug, latency * 1000)
+                    completion(ForwardResult(response: responseData, latency: latency, error: nil, server: self.server))
+                }
+            }
+        })
+    }
+
+    func cancel() {
+        connectionLock.lock()
+        defer { connectionLock.unlock() }
+
+        connection?.cancel()
+        connection = nil
+        connectionVersion += 1
     }
 }
 
@@ -360,6 +485,8 @@ class DNSForwarderManager {
         switch server.type {
         case .doh:
             forwarder = DoHForwarder(server: server)
+        case .dot:
+            forwarder = DoTForwarder(server: server)
         case .udp:
             forwarder = UDPForwarder(server: server)
         case .direct:

@@ -4,7 +4,7 @@ import Icon from 'react-native-vector-icons/Feather';
 import { useApp } from '../contexts/AppContext';
 import { DnsLog } from '../types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { responsive, getPagePadding, getCardPadding } from '../utils/responsive';
+import { responsive, getPagePadding, getCardPadding, formatLatency } from '../utils/responsive';
 
 interface LogItemProps {
   log: DnsLog;
@@ -42,6 +42,7 @@ const LogItem: React.FC<LogItemProps> = React.memo(({ log }) => {
   };
 
   const badgeStyle = getBadgeStyle();
+  const latency = formatLatency(log.latency);
 
   return (
     <View style={styles.logItem}>
@@ -52,18 +53,18 @@ const LogItem: React.FC<LogItemProps> = React.memo(({ log }) => {
       />
       <View style={styles.logContent}>
         <Text style={styles.logDomain} numberOfLines={1}>{log.domain}</Text>
-        <View style={styles.logMeta}>
-          <View style={[styles.categoryBadge, { backgroundColor: badgeStyle.bgColor }]}>
-            <Text style={[styles.categoryText, { color: badgeStyle.color }]}>
-              {log.category}
-            </Text>
-          </View>
-          <Text style={styles.logTime}>{formatTimestamp(log.timestamp)}</Text>
+        <View style={[styles.categoryBadge, { backgroundColor: badgeStyle.bgColor }]}>
+          <Text style={[styles.categoryText, { color: badgeStyle.color }]}>
+            {log.category}
+          </Text>
         </View>
       </View>
-      <View style={styles.latencyBadge}>
-        <Icon name="activity" size={10} color="#06b6d4" />
-        <Text style={styles.latencyText}>{log.latency}ms</Text>
+      <View style={styles.rightColumn}>
+        <View style={styles.latencyBadge}>
+          <Icon name="activity" size={10} color="#06b6d4" />
+          <Text style={styles.latencyText}>{latency.value}{latency.unit}</Text>
+        </View>
+        <Text style={styles.logTime}>{formatTimestamp(log.timestamp)}</Text>
       </View>
     </View>
   );
@@ -123,11 +124,6 @@ export const LogsView: React.FC = () => {
         {/* Stats Summary */}
         <View style={styles.statsRow}>
           <View style={styles.statItem}>
-            <Text style={styles.statValue}>{stats.total}</Text>
-            <Text style={styles.statLabel}>总计</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statItem}>
             <Text style={[styles.statValue, { color: '#ef4444' }]}>{stats.blocked}</Text>
             <Text style={styles.statLabel}>过滤</Text>
           </View>
@@ -143,7 +139,7 @@ export const LogsView: React.FC = () => {
           <Icon name="search" size={18} color="#64748b" style={styles.searchIcon} />
           <TextInput
             style={styles.searchInput}
-            placeholder="搜索域名..."
+            placeholder="搜索域名...(只支持最近1000条记录)"
             placeholderTextColor="#64748b"
             value={searchTerm}
             onChangeText={setSearchTerm}
@@ -361,19 +357,19 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#fff',
   },
-  logMeta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
   categoryBadge: {
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 6,
+    alignSelf: 'flex-start',
   },
   categoryText: {
     fontSize: 10,
     fontWeight: '600',
+  },
+  rightColumn: {
+    alignItems: 'flex-end',
+    gap: 6,
   },
   logTime: {
     fontSize: 11,

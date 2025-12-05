@@ -1,0 +1,14 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- 背景圆 -->
+  <circle cx="50" cy="50" r="48" fill="#06b6d4" opacity="0.1"/>
+
+  <!-- 盾牌外形 -->
+  <path d="M50 10 L75 25 L75 50 Q75 75 50 85 Q25 75 25 50 L25 25 Z"
+        fill="#06b6d4"
+        stroke="#0891b2"
+        stroke-width="2"/>
+
+  <!-- 字母 I -->
+  <rect x="45" y="35" width="10" height="35" fill="white" rx="2"/>
+  <circle cx="50" cy="28" r="4" fill="white"/>
+</svg>

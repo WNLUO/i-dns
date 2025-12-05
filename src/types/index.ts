@@ -13,11 +13,35 @@ export interface ChartDataPoint {
   allowed: number;
 }
 
+export type DnsProtocol = 'doh' | 'dot' | 'udp';
+export type DnsRegion = 'china' | 'global';
+export type DnsHealthStatus = 'healthy' | 'slow' | 'timeout' | 'unknown';
+
 export interface DnsProvider {
   id: string;
   name: string;
   description: string;
   icon: string; // Feather icon name (e.g., 'shield', 'zap', 'search')
+  region: DnsRegion;
+  protocols: DnsProtocol[]; // 支持的协议
+  features?: string[]; // 特性标签（如"儿童保护"、"防劫持"）
+}
+
+export interface DnsServerConfig {
+  doh?: string;
+  dot?: string;
+  udp?: string;
+  priority: number;
+  fallback?: string; // 备用服务商ID
+  supportsEDNS: boolean;
+}
+
+export interface DnsHealthCheck {
+  providerId: string;
+  latency: number; // ms
+  status: DnsHealthStatus;
+  lastCheck: string;
+  protocol: DnsProtocol;
 }
 
 export type Tab = 'home' | 'stats' | 'logs' | 'settings';
@@ -37,6 +61,11 @@ export interface DomainRule {
 // 应用设置
 export interface AppSettings {
   selectedDnsProvider: string; // DNS服务商ID
+  selectedProtocol?: DnsProtocol; // 用户选择的协议
+  autoFallback: boolean; // 自动故障转移
+  customFallbackList: string[]; // 自定义备用列表
+  healthCheckInterval: number; // 健康检查间隔（秒）
+  smartSelection: boolean; // 智能选择最优DNS
   autoStart: boolean; // 开机自启
   childProtectionMode: boolean; // 儿童保护模式
   notificationsEnabled: boolean; // 通知提醒

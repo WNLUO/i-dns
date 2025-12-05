@@ -27,171 +27,149 @@ const TUTORIAL_DATA: TutorialSection[] = [
   {
     id: 'intro',
     icon: 'book-open',
-    title: 'DNS 工作原理',
+    title: 'iDNS 简介',
     content: [
       {
-        title: '什么是 DNS？',
+        title: '什么是 iDNS？',
         description:
-          'DNS (Domain Name System) 是互联网的"电话簿"，将人类可读的域名（如 example.com）转换为计算机可识别的 IP 地址。',
+          'iDNS 家庭守护是一款专为家庭设计的网络安全应用，使用先进的 DNS-over-HTTPS 技术，帮助您保护家人的网络安全。',
       },
       {
-        title: 'DNS 过滤原理',
+        title: 'iDNS 如何工作？',
         description:
-          '通过配置特定的 DNS 服务器，可以在域名解析阶段拦截不良网站、广告和追踪器，从而保护家庭网络安全。',
+          '应用通过自有的加密 DNS 服务器（i-dns.wnluo.com）处理您的网络请求，在域名解析阶段自动拦截不良内容、广告和恶意网站。',
       },
       {
-        title: '为什么需要 DNS 过滤？',
+        title: 'iDNS 的优势',
         description:
-          '• 保护儿童远离不适宜内容\n• 拦截广告和追踪器，保护隐私\n• 防止访问恶意网站和钓鱼网站\n• 提升浏览体验，节省流量',
+          '• 一键开启，自动保护全设备\n• 保护儿童远离不适宜内容\n• 拦截广告和追踪器，保护隐私\n• 实时统计，了解守护效果\n• 本地存储，数据更安全',
       },
     ],
   },
   {
-    id: 'router',
-    icon: 'wifi',
-    title: '路由器 DNS 配置',
+    id: 'start',
+    icon: 'play-circle',
+    title: '快速开始',
     content: [
       {
         step: '1',
-        title: '登录路由器管理界面',
-        description: '在浏览器中输入路由器IP地址（通常是 192.168.1.1 或 192.168.0.1），使用管理员账号密码登录。',
+        title: '首次使用',
+        description: '首次打开应用时，请仔细阅读《用户协议》和《隐私政策》，点击"同意并继续"。',
       },
       {
         step: '2',
-        title: '找到 DNS 设置',
-        description: '在"网络设置"、"WAN设置"或"DHCP设置"中找到 DNS 服务器配置选项。',
+        title: '启动守护',
+        description: '在首页点击中央的盾牌按钮，即可一键开启网络守护。应用将自动配置 DNS 设置。',
+        note: '首次启动需要授予 VPN 配置权限，这是 iOS 系统要求，iDNS 不会建立真正的 VPN 连接。',
       },
       {
         step: '3',
-        title: '配置 DNS 服务器',
-        description: '输入家庭友好的 DNS 服务器地址：',
-        note: '首选DNS：94.140.14.14 (AdGuard家庭保护)\n备用DNS：1.1.1.3 (Cloudflare家庭版)',
+        title: '查看效果',
+        description: '开启守护后，应用会实时显示延迟、已过滤和安全访问的请求数量，让您了解守护效果。',
       },
       {
         step: '4',
-        title: '保存并重启',
-        description: '保存设置后，重启路由器使配置生效。所有连接到该路由器的设备都将使用新的 DNS 设置。',
+        title: '正常使用',
+        description: '守护开启后，您可以正常使用设备上网。应用会在后台默默守护，无需任何额外操作。',
       },
     ],
   },
   {
-    id: 'ios',
-    icon: 'smartphone',
-    title: 'iOS 设备配置',
+    id: 'features',
+    icon: 'grid',
+    title: '功能介绍',
     content: [
       {
-        step: '1',
-        title: '打开设置',
-        description: '在 iPhone 或 iPad 上打开"设置"应用。',
+        title: '首页',
+        description: '• 一键开关守护功能\n• 实时查看连接状态和延迟\n• 查看今日已过滤、安全访问统计\n• 显示总请求数和拦截率',
       },
       {
-        step: '2',
-        title: '选择 Wi-Fi',
-        description: '点击"Wi-Fi"，找到当前连接的网络，点击右侧的"ℹ️"图标。',
+        title: '统计页面',
+        description: '• 查看总请求数和拦截率\n• 过去24小时请求趋势图表\n• 守护效率评分\n• 详细的守护数据统计',
       },
       {
-        step: '3',
-        title: '配置 DNS',
-        description: '向下滚动找到"配置 DNS"，点击进入，选择"手动"。',
+        title: '日志页面',
+        description: '• 实时查看所有 DNS 查询记录\n• 查看已过滤和安全通过的域名\n• 搜索特定域名记录\n• 按状态筛选日志',
       },
       {
-        step: '4',
-        title: '添加服务器',
-        description: '删除现有服务器，添加：',
-        note: '94.140.14.14\n1.1.1.3',
-      },
-      {
-        step: '5',
-        title: '保存设置',
-        description: '点击右上角"存储"保存配置，设置立即生效。',
+        title: '设置页面',
+        description: '• 查看当前 DNS 服务商信息\n• 设置日志保留时间\n• 清除历史日志\n• 查看法律文档和使用教程',
       },
     ],
   },
   {
-    id: 'android',
-    icon: 'smartphone',
-    title: 'Android 设备配置',
+    id: 'logs',
+    icon: 'file-text',
+    title: '日志管理',
     content: [
       {
-        step: '1',
-        title: '打开设置',
-        description: '打开 Android 手机的"设置"应用。',
+        title: '查看日志',
+        description: '在日志页面可以查看所有 DNS 查询记录，包括域名、IP地址、时间和延迟信息。',
       },
       {
-        step: '2',
-        title: '网络和互联网',
-        description: '点击"网络和互联网"或"Wi-Fi"选项。',
+        title: '搜索功能',
+        description: '使用顶部搜索框可以快速查找特定域名的访问记录，方便排查问题。',
       },
       {
-        step: '3',
-        title: '选择网络',
-        description: '长按当前连接的 Wi-Fi 网络，选择"修改网络"。',
+        title: '筛选日志',
+        description: '通过"全部"、"已过滤"、"安全通过"按钮可以快速筛选不同类型的日志记录。',
       },
       {
-        step: '4',
-        title: '高级选项',
-        description: '展开"高级选项"，找到"IP 设置"，改为"静态"。',
-      },
-      {
-        step: '5',
-        title: '配置 DNS',
-        description: '在 DNS 1 和 DNS 2 字段中分别输入：',
-        note: 'DNS 1: 94.140.14.14\nDNS 2: 1.1.1.3',
-      },
-      {
-        step: '6',
-        title: '保存设置',
-        description: '点击"保存"，设置立即生效。',
+        title: '日志保留',
+        description: '在设置中可以选择日志保留时间（1天、3天、7天或30天），过期日志会自动清理。',
+        note: '日志数据仅保存在您的设备本地，不会上传到服务器。',
       },
     ],
   },
   {
-    id: 'servers',
+    id: 'dns',
     icon: 'server',
-    title: '推荐 DNS 服务器',
+    title: 'DNS 服务说明',
     content: [
       {
-        title: 'AdGuard DNS 家庭保护',
-        description: 'DNS: 94.140.14.14\n功能: 拦截广告、追踪器和成人内容',
-        note: '适合有儿童的家庭使用',
+        title: 'I-DNS 服务器',
+        description: 'iDNS 使用自有的 DNS-over-HTTPS 服务器（i-dns.wnluo.com），为您提供安全、快速的 DNS 解析服务。',
+        note: '服务器部署在国内，访问速度快，延迟低。',
       },
       {
-        title: 'Cloudflare 家庭版',
-        description: 'DNS: 1.1.1.3\n功能: 拦截恶意软件和成人内容',
-        note: '速度快，隐私保护好',
+        title: 'HTTPS 加密',
+        description: '所有 DNS 查询都通过加密的 HTTPS 协议传输，确保您的查询不会被第三方截获或篡改。',
       },
       {
-        title: 'Google DNS',
-        description: 'DNS: 8.8.8.8\n功能: 基础DNS解析，无过滤',
-        note: '适合需要基础DNS服务的场景',
+        title: '智能过滤',
+        description: '服务器内置智能过滤规则，可以自动拦截广告、追踪器、恶意网站和不适宜内容。',
       },
       {
-        title: 'NextDNS',
-        description: '网址: nextdns.io\n功能: 高度可定制的DNS过滤',
-        note: '可自定义拦截规则，适合高级用户',
+        title: '隐私保护',
+        description: 'DNS 查询实时处理，不做永久保存。统计数据仅在您的设备本地存储，充分保护您的隐私。',
+        note: '我们不会收集、分析或出售您的 DNS 查询记录。',
       },
     ],
   },
   {
-    id: 'tips',
-    icon: 'alert-circle',
-    title: '注意事项',
+    id: 'faq',
+    icon: 'help-circle',
+    title: '常见问题',
     content: [
       {
-        title: 'DNS 过滤的局限性',
-        description: '• DNS 过滤只能在域名解析阶段生效\n• 无法拦截已经建立的连接\n• 某些应用可能使用内置 DNS\n• 需要配合其他家长控制工具',
+        title: '为什么需要 VPN 权限？',
+        description: 'iOS 系统要求使用网络扩展（Network Extension）功能时必须请求 VPN 配置权限。iDNS 只是借用这个接口来配置 DNS，不会建立真正的 VPN 连接，也不会路由您的网络流量。',
       },
       {
-        title: '配置后的验证',
-        description: '• 访问测试网站确认过滤生效\n• 检查网络速度是否正常\n• 确认家庭成员设备都已配置\n• 定期检查配置是否还在',
+        title: '会影响网速吗？',
+        description: 'iDNS 只处理 DNS 查询，不会影响您的正常网络速度。由于服务器部署在国内，DNS 解析速度反而可能更快。拦截广告后，还能节省流量，提升浏览速度。',
       },
       {
-        title: '遇到问题时',
-        description: '• 检查 DNS 地址是否输入正确\n• 尝试重启路由器和设备\n• 清除设备 DNS 缓存\n• 联系 DNS 服务提供商支持',
+        title: '可以完全拦截所有不良内容吗？',
+        description: 'DNS 过滤是在域名解析阶段进行的，可以有效拦截大部分不良网站。但无法做到 100% 完美，建议配合家长监督和其他家长控制工具一起使用。',
       },
       {
-        title: '最佳实践',
-        description: '• 在路由器统一配置（覆盖所有设备）\n• 定期更新 DNS 服务器列表\n• 与孩子沟通网络安全知识\n• 配合使用家长控制功能',
+        title: '为什么有些网站打不开？',
+        description: '如果某个正常网站被误拦截，可能是该域名在过滤列表中。您可以在日志中查看被拦截的域名，并通过邮箱联系我们报告误判。',
+      },
+      {
+        title: '数据安全吗？',
+        description: '所有 DNS 查询都通过 HTTPS 加密传输，查询记录不做永久保存。统计数据仅在您的设备本地存储，我们无法访问您的浏览记录。',
       },
     ],
   },
@@ -212,7 +190,7 @@ export const TutorialView: React.FC = () => {
         </View>
         <Text style={styles.title}>使用教程</Text>
         <Text style={styles.subtitle}>
-          了解 DNS 过滤原理，配置家庭网络防护
+          了解 iDNS 功能，开启家庭网络守护
         </Text>
       </View>
 
@@ -266,7 +244,7 @@ export const TutorialView: React.FC = () => {
 
       <View style={styles.footer}>
         <Text style={styles.footerText}>
-          💡 提示：配置 DNS 不会影响网络速度，反而可能因拦截广告而提升浏览体验
+          💡 如有疑问或建议，欢迎通过邮箱 admin@wnluo.com 联系我们
         </Text>
       </View>
     </ScrollView>

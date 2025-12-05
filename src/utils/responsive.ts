@@ -147,3 +147,33 @@ export const getPagePadding = (): number => {
     default: scaleSpacing(24),
   });
 };
+
+/**
+ * 格式化数字，超过1000转换为K，超过1000000转换为M
+ */
+export const formatNumber = (value: number): string => {
+  if (value >= 1000000) {
+    return (value / 1000000).toFixed(1) + 'M';
+  }
+  if (value >= 1000) {
+    return (value / 1000).toFixed(1) + 'K';
+  }
+  return value.toString();
+};
+
+/**
+ * 格式化延迟数值（毫秒），超过1000ms转换为秒
+ * 返回包含数值和单位的对象
+ */
+export const formatLatency = (ms: number): { value: string; unit: string } => {
+  if (ms >= 1000) {
+    return {
+      value: (ms / 1000).toFixed(1),
+      unit: 's',
+    };
+  }
+  return {
+    value: Math.round(ms).toString(),
+    unit: 'ms',
+  };
+};

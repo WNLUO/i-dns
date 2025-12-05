@@ -102,7 +102,7 @@ function App() {
                 <RNText style={styles.closeButtonText}>← 返回</RNText>
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.modalContent}>
+            <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={false}>
               {showLegalPage === 'user-agreement' && <UserAgreementView />}
               {showLegalPage === 'privacy-policy' && <PrivacyPolicyView />}
               {showLegalPage === 'child-protection' && <ChildProtectionRulesView />}

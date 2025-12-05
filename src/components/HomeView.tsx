@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Animated, ScrollView } from '
 import Icon from 'react-native-vector-icons/Feather';
 import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { responsive, getPagePadding, scaleWidth, scaleHeight, responsiveValue } from '../utils/responsive';
+import { responsive, getPagePadding, scaleWidth, scaleHeight, responsiveValue, formatNumber, formatLatency } from '../utils/responsive';
 import { useApp } from '../contexts/AppContext';
 
 export const HomeView: React.FC = () => {
@@ -103,7 +103,10 @@ export const HomeView: React.FC = () => {
         <View style={styles.statusLatency}>
           <Text style={styles.latencyNumber} numberOfLines={1}>
             {isConnected && latestLatency > 0
-              ? `${Math.round(latestLatency)}ms`
+              ? (() => {
+                  const latency = formatLatency(latestLatency);
+                  return `${latency.value}${latency.unit}`;
+                })()
               : '--'}
           </Text>
           <Text style={styles.latencyLabel} numberOfLines={1}>延迟</Text>
@@ -199,7 +202,7 @@ export const HomeView: React.FC = () => {
           <View style={styles.statCard}>
             <Icon name="x-circle" size={32} color="#ef4444" />
             <Text style={styles.statNumber} numberOfLines={1}>
-              {todayStatistics.blockedRequests.toLocaleString()}
+              {formatNumber(todayStatistics.blockedRequests)}
             </Text>
             <Text style={styles.statLabel} numberOfLines={1}>已过滤</Text>
           </View>
@@ -208,7 +211,7 @@ export const HomeView: React.FC = () => {
           <View style={styles.statCard}>
             <Icon name="check-circle" size={32} color="#10b981" />
             <Text style={styles.statNumber} numberOfLines={1}>
-              {todayStatistics.allowedRequests.toLocaleString()}
+              {formatNumber(todayStatistics.allowedRequests)}
             </Text>
             <Text style={styles.statLabel} numberOfLines={1}>安全访问</Text>
           </View>
@@ -216,15 +219,13 @@ export const HomeView: React.FC = () => {
 
         {/* Network Stats */}
         <View style={styles.networkCard}>
-          <Icon name="shield" size={24} color="#06b6d4" />
           <View style={styles.networkInfo}>
             <Text style={styles.networkValue} numberOfLines={1}>
-              {todayStatistics.totalRequests.toLocaleString()}
+              {formatNumber(todayStatistics.totalRequests)}
             </Text>
             <Text style={styles.networkLabel} numberOfLines={1}>总请求数</Text>
           </View>
           <View style={styles.networkDivider} />
-          <Icon name="heart" size={24} color="#8b5cf6" />
           <View style={styles.networkInfo}>
             <Text style={styles.networkValue} numberOfLines={1}>
               {todayStatistics.blockRate.toFixed(1)}%
@@ -458,16 +459,20 @@ const styles = StyleSheet.create({
   },
   networkInfo: {
     flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   networkValue: {
     fontSize: responsive.fontSize.xl,
     fontWeight: '700',
     color: '#fff',
     marginBottom: 2,
+    textAlign: 'center',
   },
   networkLabel: {
     fontSize: responsive.fontSize.xs,
     color: '#94a3b8',
+    textAlign: 'center',
   },
   networkDivider: {
     width: 1,
