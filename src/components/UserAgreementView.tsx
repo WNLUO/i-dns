@@ -126,8 +126,8 @@ export const UserAgreementView: React.FC<UserAgreementViewProps> = ({ onClose })
             我们会尽力保证服务的稳定性，但不保证服务不会中断或出现错误。
           </Text>
           <Text style={styles.paragraph}>
-            6.2 第三方服务{'\n'}
-            本应用使用第三方DNS服务（如AdGuard、Cloudflare等）。我们不对第三方服务的质量和可用性承担责任。
+            6.2 DNS服务{'\n'}
+            本应用使用自有的DNS-over-HTTPS服务器（i-dns.wnluo.com）提供DNS解析服务。我们会尽力保证服务的稳定性和可用性，但不对因网络故障、服务器维护等原因导致的服务中断承担责任。
           </Text>
           <Text style={styles.paragraph}>
             6.3 过滤效果{'\n'}
@@ -180,8 +180,8 @@ export const UserAgreementView: React.FC<UserAgreementViewProps> = ({ onClose })
           <Text style={styles.paragraph}>
             如您对本协议有任何疑问，请通过以下方式联系我们：{'\n'}
             {'\n'}
-            邮箱：[您的联系邮箱]{'\n'}
-            地址：[您的公司地址]
+            邮箱：admin@wnluo.com{'\n'}
+            地址：贵州省贵阳市贵州师范大学
           </Text>
         </View>
 

@@ -16,6 +16,10 @@ class DNSVPNModule: RCTEventEmitter {
     private var hasListeners = false
     private let appGroupIdentifier = "group.com.idns.wnlluo"
 
+    // 防抖相关
+    private var lastStatusSent: NEVPNStatus?
+    private var lastStatusTime: Date = Date.distantPast
+
     // MARK: - Initialization
 
     override init() {
@@ -211,49 +215,94 @@ class DNSVPNModule: RCTEventEmitter {
 
             print("📦 Found \(managers?.count ?? 0) VPN configuration(s)")
 
-            if let manager = managers?.first {
-                print("✓ Using existing VPN configuration")
+            // CRITICAL FIX: Find OUR configuration by bundle identifier
+            // This prevents using other VPN apps' configurations
+            let ourBundleId = "com.idns.wnlluo.DNSPacketTunnelProvider"
+            let ourManager = managers?.first(where: { manager in
+                if let providerProtocol = manager.protocolConfiguration as? NETunnelProviderProtocol {
+                    return providerProtocol.providerBundleIdentifier == ourBundleId
+                }
+                return false
+            })
+
+            if let manager = ourManager {
+                print("✓ Found our VPN configuration")
                 print("  Description: \(manager.localizedDescription ?? "none")")
                 print("  Enabled: \(manager.isEnabled)")
                 print("  Provider Bundle ID: \((manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier ?? "none")")
 
-                // CRITICAL FIX: Ensure DNS configuration is correct (fix old configs)
-                if let providerProtocol = manager.protocolConfiguration as? NETunnelProviderProtocol {
-                    let currentDNS = providerProtocol.providerConfiguration?["dnsServer"] as? String ?? ""
-                    let expectedDNS = "https://i-dns.wnluo.com/dns-query"
-
-                    if currentDNS != expectedDNS {
-                        print("⚠️ DNS configuration mismatch!")
-                        print("  Current: \(currentDNS)")
-                        print("  Expected: \(expectedDNS)")
-                        print("🔧 Updating DNS configuration...")
-
-                        providerProtocol.providerConfiguration = [
-                            "dnsServer": expectedDNS
-                        ]
-                        manager.protocolConfiguration = providerProtocol
-
-                        manager.saveToPreferences { error in
-                            if let error = error {
-                                print("❌ Failed to update DNS configuration: \(error.localizedDescription)")
-                            } else {
-                                print("✅ DNS configuration updated successfully")
-                            }
-                            self.vpnManager = manager
+                // CRITICAL FIX: Re-enable if disabled (happens after using other VPN apps)
+                // iOS only allows one VPN configuration to be enabled at a time
+                if !manager.isEnabled {
+                    print("⚠️ Configuration is disabled (likely due to other VPN usage), re-enabling...")
+                    manager.isEnabled = true
+                    manager.saveToPreferences { error in
+                        if let error = error {
+                            print("❌ Failed to re-enable configuration: \(error.localizedDescription)")
                             completion?(error)
+                            return
                         }
-                        return
+
+                        print("✅ Configuration re-enabled successfully")
+
+                        // Reload to get updated state
+                        manager.loadFromPreferences { error in
+                            if let error = error {
+                                print("❌ Failed to reload after re-enabling: \(error.localizedDescription)")
+                                completion?(error)
+                                return
+                            }
+
+                            // Continue with DNS validation
+                            self.validateAndUpdateDNSConfiguration(manager: manager, completion: completion)
+                        }
                     }
+                    return
                 }
 
-                self.vpnManager = manager
-                completion?(nil)
+                // Validate DNS configuration
+                self.validateAndUpdateDNSConfiguration(manager: manager, completion: completion)
             } else {
                 // Create new VPN configuration
-                print("⚠️ No existing VPN configuration, creating new one...")
+                print("⚠️ No existing VPN configuration found for our app, creating new one...")
                 self.createVPNConfiguration(completion: completion)
             }
         }
+    }
+
+    // Helper function to validate and update DNS configuration
+    private func validateAndUpdateDNSConfiguration(manager: NETunnelProviderManager, completion: ((Error?) -> Void)?) {
+        // CRITICAL FIX: Ensure DNS configuration is correct (fix old configs)
+        if let providerProtocol = manager.protocolConfiguration as? NETunnelProviderProtocol {
+            let currentDNS = providerProtocol.providerConfiguration?["dnsServer"] as? String ?? ""
+            let expectedDNS = "https://i-dns.wnluo.com/dns-query"
+
+            if currentDNS != expectedDNS {
+                print("⚠️ DNS configuration mismatch!")
+                print("  Current: \(currentDNS)")
+                print("  Expected: \(expectedDNS)")
+                print("🔧 Updating DNS configuration...")
+
+                providerProtocol.providerConfiguration = [
+                    "dnsServer": expectedDNS
+                ]
+                manager.protocolConfiguration = providerProtocol
+
+                manager.saveToPreferences { error in
+                    if let error = error {
+                        print("❌ Failed to update DNS configuration: \(error.localizedDescription)")
+                    } else {
+                        print("✅ DNS configuration updated successfully")
+                    }
+                    self.vpnManager = manager
+                    completion?(error)
+                }
+                return
+            }
+        }
+
+        self.vpnManager = manager
+        completion?(nil)
     }
 
     private func createVPNConfiguration(completion: ((Error?) -> Void)? = nil) {
@@ -315,6 +364,19 @@ class DNSVPNModule: RCTEventEmitter {
         let status = manager.connection.status
         let isConnected = status == .connected
 
+        // 防抖：如果状态相同且时间间隔 < 0.5秒，跳过
+        let currentTime = Date()
+        if let lastStatus = lastStatusSent,
+           lastStatus == status,
+           currentTime.timeIntervalSince(lastStatusTime) < 0.5 {
+            // 跳过重复事件
+            return
+        }
+
+        // 更新防抖记录
+        lastStatusSent = status
+        lastStatusTime = currentTime
+
         print("========================================")
         print("📡 VPN Status Changed")
         print("Status: \(statusString(status))")
@@ -361,9 +423,15 @@ class DNSVPNModule: RCTEventEmitter {
     private func handleDNSEvent() {
         guard hasListeners else { return }
 
-        // Read DNS events from shared storage
-        guard let sharedDefaults = UserDefaults(suiteName: appGroupIdentifier),
-              let events = sharedDefaults.array(forKey: "dnsEvents") as? [[String: Any]],
+        // Read DNS events from shared storage with proper error handling
+        guard let sharedDefaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            print("⚠️ Failed to access App Group shared storage")
+            return
+        }
+
+        // Safely read events array
+        guard let events = sharedDefaults.array(forKey: "dnsEvents") as? [[String: Any]],
+              !events.isEmpty,
               let lastEvent = events.last else {
             return
         }
@@ -400,7 +468,10 @@ class DNSVPNModule: RCTEventEmitter {
     }
 
     private func updateSharedBlacklist(add addDomain: String? = nil, remove removeDomain: String? = nil) {
-        guard let sharedDefaults = UserDefaults(suiteName: appGroupIdentifier) else { return }
+        guard let sharedDefaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            print("⚠️ Failed to access App Group shared storage for blacklist update")
+            return
+        }
 
         var blacklist = sharedDefaults.array(forKey: "blacklist") as? [String] ?? []
 
@@ -417,7 +488,10 @@ class DNSVPNModule: RCTEventEmitter {
     }
 
     private func updateSharedWhitelist(add addDomain: String? = nil, remove removeDomain: String? = nil) {
-        guard let sharedDefaults = UserDefaults(suiteName: appGroupIdentifier) else { return }
+        guard let sharedDefaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            print("⚠️ Failed to access App Group shared storage for whitelist update")
+            return
+        }
 
         var whitelist = sharedDefaults.array(forKey: "whitelist") as? [String] ?? []
 

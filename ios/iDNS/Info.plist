@@ -39,6 +39,12 @@
 	</dict>
 	<key>NSAppTransportSecurityDescription</key>
 	<string>为了提供安全的DNS服务，本应用需要访问网络</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>此应用需要访问本地网络以连接到开发服务器进行调试</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_http._tcp</string>
+	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>RCTNewArchEnabled</key>

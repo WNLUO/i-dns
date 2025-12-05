@@ -104,7 +104,8 @@ export const PrivacyPolicyView: React.FC<PrivacyPolicyViewProps> = ({ onClose })
             5.1 我们不会向第三方出售您的个人信息。
           </Text>
           <Text style={styles.paragraph}>
-            5.2 我们可能与第三方DNS服务提供商（如AdGuard、Cloudflare等）共享必要的DNS查询信息，以提供服务。这些服务商均承诺遵守严格的隐私保护标准。
+            5.2 DNS查询处理{'\n'}
+            本应用使用自有的DNS-over-HTTPS服务器（i-dns.wnluo.com）处理DNS查询。所有DNS查询均通过加密的HTTPS协议传输，确保您的DNS查询不会被第三方截获。我们不会与其他第三方DNS服务提供商共享您的DNS查询信息。
           </Text>
           <Text style={styles.paragraph}>
             5.3 法律要求{'\n'}
@@ -140,8 +141,8 @@ export const PrivacyPolicyView: React.FC<PrivacyPolicyViewProps> = ({ onClose })
           <Text style={styles.paragraph}>
             如您对本隐私政策有任何疑问、意见或建议，请通过以下方式联系我们：{'\n'}
             {'\n'}
-            邮箱：[您的联系邮箱]{'\n'}
-            地址：[您的公司地址]
+            邮箱：admin@wnluo.com{'\n'}
+            地址：贵州省贵阳市贵州师范大学
           </Text>
         </View>
       </ScrollView>

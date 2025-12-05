@@ -9,7 +9,7 @@ import { useApp } from '../contexts/AppContext';
 export const HomeView: React.FC = () => {
   // Hook顺序很重要！useSafeAreaInsets使用useContext，必须在所有其他hooks之前
   const insets = useSafeAreaInsets();
-  const { isConnected, setIsConnected, todayStatistics } = useApp();
+  const { isConnected, setIsConnected, todayStatistics, latestLatency } = useApp();
 
   const [scaleAnim] = useState(new Animated.Value(1));
   const [glowAnim] = useState(new Animated.Value(0));
@@ -102,8 +102,8 @@ export const HomeView: React.FC = () => {
         </View>
         <View style={styles.statusLatency}>
           <Text style={styles.latencyNumber} numberOfLines={1}>
-            {todayStatistics.averageLatency > 0
-              ? `${Math.round(todayStatistics.averageLatency)}ms`
+            {isConnected && latestLatency > 0
+              ? `${Math.round(latestLatency)}ms`
               : '--'}
           </Text>
           <Text style={styles.latencyLabel} numberOfLines={1}>延迟</Text>
@@ -112,8 +112,6 @@ export const HomeView: React.FC = () => {
 
       {/* Main Control Button */}
       <View style={styles.controlSection}>
-        <Text style={styles.sectionTitle}>家庭守护</Text>
-
         <View style={styles.buttonWrapper}>
           {/* Animated Glow Effect */}
           {isConnected && (

@@ -18,7 +18,8 @@ const formatTimestamp = (timestamp: string): string => {
   return `${hours}:${minutes}:${seconds}`;
 };
 
-const LogItem: React.FC<LogItemProps> = ({ log }) => {
+// Memoize LogItem to prevent unnecessary re-renders
+const LogItem: React.FC<LogItemProps> = React.memo(({ log }) => {
   const isBlocked = log.status === 'blocked';
 
   // Determine badge color and style based on content
@@ -66,7 +67,7 @@ const LogItem: React.FC<LogItemProps> = ({ log }) => {
       </View>
     </View>
   );
-};
+});
 
 export const LogsView: React.FC = () => {
   // Hook顺序很重要！useContext hooks必须在最前面
@@ -195,6 +196,17 @@ export const LogsView: React.FC = () => {
         renderItem={({ item }) => <LogItem log={item} />}
         contentContainerStyle={[styles.listContent, { paddingBottom: Math.max(insets.bottom, 20) + 100 }]}
         showsVerticalScrollIndicator={false}
+        // Performance optimizations
+        removeClippedSubviews={true}
+        maxToRenderPerBatch={10}
+        updateCellsBatchingPeriod={50}
+        initialNumToRender={15}
+        windowSize={21}
+        getItemLayout={(data, index) => ({
+          length: 72, // Approximate height of LogItem
+          offset: 72 * index,
+          index,
+        })}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Icon name="inbox" size={48} color="#334155" />

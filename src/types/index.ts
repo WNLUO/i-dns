@@ -58,3 +58,29 @@ export interface Statistics {
   };
   chartData: ChartDataPoint[];
 }
+
+// 每日统计数据
+export interface DailyStats {
+  date: string; // YYYY-MM-DD
+  totalRequests: number;
+  blockedRequests: number;
+  allowedRequests: number;
+  totalLatency: number; // 累计延迟，用于计算平均值
+}
+
+// 持久化的统计计数器
+export interface StatisticsCounters {
+  // 全局累计统计
+  totalRequests: number;
+  blockedRequests: number;
+  allowedRequests: number;
+  totalLatency: number; // 累计延迟
+
+  // 按日期存储的统计
+  dailyStats: {
+    [date: string]: DailyStats;
+  };
+
+  // 最后更新时间
+  lastUpdated: string;
+}

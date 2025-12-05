@@ -1,4 +1,5 @@
-import {DnsLog, ChartDataPoint, Statistics} from '../types';
+import {DnsLog, ChartDataPoint, Statistics, StatisticsCounters} from '../types';
+import * as storage from './storage';
 
 // 计算统计数据
 export const calculateStatistics = (logs: DnsLog[]): Statistics => {
@@ -151,4 +152,110 @@ export const getCategoryBreakdown = (logs: DnsLog[]) => {
       color: '#64748b', // slate
     },
   ];
+};
+
+// ===== 基于计数器的统计方法 =====
+
+// 从计数器获取全局统计
+export const getStatisticsFromCounters = async (logs: DnsLog[]): Promise<Statistics> => {
+  try {
+    const counters = await storage.getStatisticsCounters();
+
+    // 计算平均延迟
+    const averageLatency = counters.totalRequests > 0
+      ? counters.totalLatency / counters.totalRequests
+      : 0;
+
+    // 计算拦截率
+    const blockRate = counters.totalRequests > 0
+      ? (counters.blockedRequests / counters.totalRequests) * 100
+      : 0;
+
+    // 图表数据仍然从日志计算（只需要最近24小时）
+    const chartData = generateChartData(logs);
+
+    return {
+      totalRequests: counters.totalRequests,
+      blockedRequests: counters.blockedRequests,
+      allowedRequests: counters.allowedRequests,
+      blockRate,
+      averageLatency,
+      categoryStats: {
+        tracker: 0,
+        ad: 0,
+        content: 0,
+        unknown: counters.blockedRequests,
+      },
+      chartData,
+    };
+  } catch (error) {
+    console.error('Failed to get statistics from counters:', error);
+    // 降级到基于日志的计算
+    return calculateStatistics(logs);
+  }
+};
+
+// 从计数器获取今日统计
+export const getTodayStatisticsFromCounters = async (logs: DnsLog[]): Promise<Statistics> => {
+  try {
+    const counters = await storage.getStatisticsCounters();
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    const todayStats = counters.dailyStats[today];
+
+    if (!todayStats) {
+      // 如果没有今日统计，返回空数据
+      return {
+        totalRequests: 0,
+        blockedRequests: 0,
+        allowedRequests: 0,
+        blockRate: 0,
+        averageLatency: 0,
+        categoryStats: {
+          tracker: 0,
+          ad: 0,
+          content: 0,
+          unknown: 0,
+        },
+        chartData: [],
+      };
+    }
+
+    // 计算平均延迟
+    const averageLatency = todayStats.totalRequests > 0
+      ? todayStats.totalLatency / todayStats.totalRequests
+      : 0;
+
+    // 计算拦截率
+    const blockRate = todayStats.totalRequests > 0
+      ? (todayStats.blockedRequests / todayStats.totalRequests) * 100
+      : 0;
+
+    // 图表数据从日志计算（只显示今日的）
+    const today_date = new Date();
+    today_date.setHours(0, 0, 0, 0);
+    const todayLogs = logs.filter(log => {
+      const logDate = new Date(log.timestamp);
+      return logDate >= today_date;
+    });
+    const chartData = generateChartData(todayLogs);
+
+    return {
+      totalRequests: todayStats.totalRequests,
+      blockedRequests: todayStats.blockedRequests,
+      allowedRequests: todayStats.allowedRequests,
+      blockRate,
+      averageLatency,
+      categoryStats: {
+        tracker: 0,
+        ad: 0,
+        content: 0,
+        unknown: todayStats.blockedRequests,
+      },
+      chartData,
+    };
+  } catch (error) {
+    console.error('Failed to get today statistics from counters:', error);
+    // 降级到基于日志的计算
+    return getTodayStatistics(logs);
+  }
 };
