@@ -34,7 +34,9 @@ export const scaleHeight = (size: number): number => {
  * 字体大小缩放（基于宽度）
  */
 export const scaleFont = (size: number): number => {
-  const scale = SCREEN_WIDTH / BASE_WIDTH;
+  // Use a clamped scale to prevent oversized text on tablets
+  const rawScale = SCREEN_WIDTH / BASE_WIDTH;
+  const scale = Math.min(rawScale, 1.4);
   const newSize = size * scale;
 
   if (Platform.OS === 'ios') {
