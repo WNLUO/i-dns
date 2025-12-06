@@ -1,3 +1,11 @@
+import { useColorScheme } from 'react-native';
+import { lightColors, darkColors, ThemeColors } from './colors';
+
+export const useThemeColors = (): ThemeColors => {
+  const colorScheme = useColorScheme();
+  return colorScheme === 'dark' ? darkColors : lightColors;
+};
+
 export const colors = {
   // Slate palette
   slate950: '#020617',
@@ -10,6 +18,7 @@ export const colors = {
   slate300: '#cbd5e1',
   slate200: '#e2e8f0',
   slate100: '#f1f5f9',
+  slate50: '#f8fafc',
 
   // Emerald palette
   emerald500: '#10b981',
@@ -22,7 +31,9 @@ export const colors = {
 
   // Blue palette
   blue900: '#1e3a8a',
+  blue500: '#3b82f6',
   blue400: '#60a5fa',
+  blue300: '#93c5fd',
 
   // Orange palette
   orange500: '#f97316',
@@ -30,8 +41,9 @@ export const colors = {
   // Purple palette
   purple500: '#a855f7',
 
-  // White
+  // White & Black
   white: '#ffffff',
+  black: '#000000',
 };
 
 export const spacing = {

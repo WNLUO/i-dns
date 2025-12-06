@@ -81,32 +81,28 @@ export const DNS_PROVIDERS: DnsProvider[] = [
   }
 ];
 
-// DNS 服务商配置映射
+// DNS 服务商配置映射 (仅使用UDP，DoH已移除)
 export const DNS_SERVER_MAP: Record<string, DnsServerConfig> = {
   'idns': {
-    doh: 'https://i-dns.wnluo.com/dns-query',
+    udp: '94.140.14.14',  // AdGuard DNS Family Protection
     priority: 1,
-    fallback: 'dnspod',
+    fallback: 'google',
     supportsEDNS: true
   },
-  'dnspod': {
-    doh: 'https://doh.pub/dns-query',
-    dot: 'dot.pub',
-    udp: '119.29.29.29',
+  'google': {
+    udp: '8.8.8.8',
     priority: 1,
-    fallback: 'alidns',
+    fallback: 'cloudflare',
     supportsEDNS: true
   },
-  'alidns': {
-    doh: 'https://dns.alidns.com/dns-query',
-    dot: 'dns.alidns.com',
-    udp: '223.5.5.5',
+  'cloudflare': {
+    udp: '1.1.1.1',
     priority: 1,
-    fallback: 'baidu',
+    fallback: 'opendns',
     supportsEDNS: true
   },
-  'baidu': {
-    udp: '180.76.76.76',
+  'opendns': {
+    udp: '208.67.222.222',
     priority: 2,
     fallback: '114dns',
     supportsEDNS: true

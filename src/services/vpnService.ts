@@ -1,8 +1,20 @@
 import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
 
+// VPN 启动结果类型
+export interface VPNStartResult {
+  requiresPermission?: boolean;
+  success?: boolean;
+}
+
+// VPN 权限结果类型
+export interface VPNPermissionResult {
+  success: boolean;
+  error?: string;
+}
+
 // VPN 原生模块接口
 interface VPNNativeModule {
-  startVPN: () => Promise<boolean>;
+  startVPN: () => Promise<VPNStartResult>;
   stopVPN: () => Promise<void>;
   getVPNStatus: () => Promise<boolean>;
   addDomainToBlacklist: (domain: string) => Promise<void>;
@@ -10,6 +22,8 @@ interface VPNNativeModule {
   addDomainToWhitelist: (domain: string) => Promise<void>;
   removeDomainFromWhitelist: (domain: string) => Promise<void>;
   updateDNSServer: (dnsServer: string) => Promise<void>;
+  checkNotificationPermission?: () => Promise<boolean>;
+  checkVPNPermission?: () => Promise<boolean>;
 }
 
 // VPN 事件类型
@@ -58,14 +72,15 @@ class VPNService {
   /**
    * 启动 VPN 连接
    */
-  async start(): Promise<boolean> {
+  async start(): Promise<VPNStartResult> {
     if (!this.isAvailable()) {
       console.warn('VPN module not available');
-      return false;
+      return { success: false };
     }
 
     try {
       const result = await DNSVPNModule.startVPN();
+      console.log('VPN start result:', result);
       return result;
     } catch (error) {
       console.error('Failed to start VPN:', error);
@@ -221,6 +236,30 @@ class VPNService {
 
     const subscription = eventEmitter.addListener(
       'VPNStatusChanged',
+      callback,
+    );
+    const listenerId = Date.now().toString();
+    this.listeners.set(listenerId, subscription);
+
+    // 返回取消监听的函数
+    return () => {
+      subscription.remove();
+      this.listeners.delete(listenerId);
+    };
+  }
+
+  /**
+   * 监听 VPN 权限请求结果 (Android Only)
+   */
+  onVPNPermissionResult(callback: (result: VPNPermissionResult) => void): () => void {
+    // 仅在 Android 平台注册此监听器
+    // iOS 不需要此事件，因为 iOS 的 VPN 权限是同步请求的
+    if (Platform.OS !== 'android' || !eventEmitter) {
+      return () => {};
+    }
+
+    const subscription = eventEmitter.addListener(
+      'VPNPermissionResult',
       callback,
     );
     const listenerId = Date.now().toString();

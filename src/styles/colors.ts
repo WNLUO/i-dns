@@ -11,6 +11,7 @@ export const colors = {
   slate300: '#cbd5e1',
   slate200: '#e2e8f0',
   slate100: '#f1f5f9',
+  slate50: '#f8fafc',
 
   // Emerald palette (扩展)
   emerald600: '#059669',
@@ -34,6 +35,7 @@ export const colors = {
   blue600: '#2563eb',
   blue500: '#3b82f6',
   blue400: '#60a5fa',
+  blue300: '#93c5fd',
 
   // Purple palette
   purple500: '#a855f7',
@@ -49,43 +51,111 @@ export const colors = {
 };
 
 // 语义化颜色
-export const semantic = {
-  success: colors.emerald400,
+export type ThemeColors = typeof lightColors;
+
+export const lightColors = {
+  success: colors.emerald500,
   warning: colors.orange500,
   danger: colors.red500,
-  info: colors.blue400,
+  info: colors.blue500,
 
   background: {
-    primary: colors.slate950,
-    secondary: colors.slate900,
-    tertiary: colors.slate800,
-    elevated: colors.slate700,
+    primary: colors.white,      // Main background
+    secondary: colors.slate50,  // Secondary background
+    tertiary: colors.slate100,  // Subtle highlights
+    elevated: colors.white,     // Cards
+    modal: colors.white,
+    input: colors.slate100,
   },
 
   text: {
-    primary: colors.white,
-    secondary: colors.slate300,
-    tertiary: colors.slate400,
-    disabled: colors.slate600,
+    primary: colors.slate900,   // Main text
+    secondary: colors.slate500, // Secondary text
+    tertiary: colors.slate400,  // Muted text
+    disabled: colors.slate300,
+    inverse: colors.white,
   },
 
   border: {
-    default: colors.slate700,
-    focus: colors.emerald500,
+    default: colors.slate200,   // Default borders
+    focus: colors.blue500,
     error: colors.red500,
+    subtle: colors.slate100,
   },
+
+  icon: {
+    primary: colors.slate900,
+    secondary: colors.slate500,
+    active: colors.blue600,
+    inactive: colors.slate400,
+  },
+
+  status: {
+    active: colors.emerald500,
+    inactive: colors.slate400,
+    warning: colors.orange500,
+    error: colors.red500,
+  }
+};
+
+export const darkColors: ThemeColors = {
+  success: colors.emerald400,
+  warning: colors.orange400,
+  danger: colors.red400,
+  info: colors.blue400,
+
+  background: {
+    primary: colors.slate950,   // Main background
+    secondary: colors.slate900, // Secondary background
+    tertiary: colors.slate800,  // Subtle highlights
+    elevated: colors.slate900,  // Cards
+    modal: colors.slate900,
+    input: colors.slate800,
+  },
+
+  text: {
+    primary: colors.slate50,    // Main text
+    secondary: colors.slate400, // Secondary text
+    tertiary: colors.slate500,  // Muted text
+    disabled: colors.slate600,
+    inverse: colors.slate950,
+  },
+
+  border: {
+    default: colors.slate800,   // Default borders
+    focus: colors.blue400,
+    error: colors.red400,
+    subtle: colors.slate800,
+  },
+
+  icon: {
+    primary: colors.slate50,
+    secondary: colors.slate400,
+    active: colors.blue400,
+    inactive: colors.slate600,
+  },
+
+  status: {
+    active: colors.emerald400,
+    inactive: colors.slate600,
+    warning: colors.orange400,
+    error: colors.red400,
+  }
 };
 
 // 渐变定义
 export const gradients = {
-  emeraldGlow: [colors.emerald400, colors.emerald500, colors.emerald600],
-  dangerGlow: [colors.red400, colors.red500, colors.red600],
-  blueAurora: [colors.blue400, colors.blue500, colors.blue600],
-  purpleAurora: [colors.purple400, colors.purple500, '#8b5cf6'],
+  // Softer glows for light mode
+  emeraldGlow: [colors.emerald300, colors.emerald400],
+  dangerGlow: [colors.red300, colors.red400],
+  blueAurora: [colors.blue300, colors.blue400],
+
+  // Minimalist gradients
+  primaryButton: [colors.slate800, colors.slate900], // Dark button on light bg
 
   background: {
-    radial: [colors.blue900 + '33', 'transparent', colors.emerald600 + '33'],
-    card: [colors.slate800 + 'CC', colors.slate800 + '99'],
+    // Very subtle gradient or just white
+    light: [colors.white, colors.slate50],
   },
 };
 

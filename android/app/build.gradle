@@ -116,4 +116,10 @@ dependencies {
     } else {
         implementation jscFlavor
     }
+
+    // OkHttp for DoH (DNS over HTTPS)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
+
+// Copy react-native-vector-icons fonts to assets
+apply from: file("../../node_modules/react-native-vector-icons/fonts.gradle")

@@ -5,6 +5,7 @@ import { DnsProvider, DnsHealthCheck } from '../types';
 import { DNS_PROVIDERS } from '../constants';
 import { DNSProviderCard } from './DNSProviderCard';
 import dnsHealthCheck from '../services/dnsHealthCheck';
+import { useThemeColors } from '../styles/theme';
 
 interface DNSProviderSelectorProps {
   selectedProviderId: string;
@@ -20,6 +21,7 @@ export const DNSProviderSelector: React.FC<DNSProviderSelectorProps> = ({
   const [expanded, setExpanded] = useState(false);
   const [healthData, setHealthData] = useState<Map<string, DnsHealthCheck>>(new Map());
   const [isChecking, setIsChecking] = useState(false);
+  const colors = useThemeColors();
 
   const selectedProvider = DNS_PROVIDERS.find(p => p.id === selectedProviderId);
   const chinaProviders = DNS_PROVIDERS.filter(p => p.region === 'china');
@@ -52,18 +54,18 @@ export const DNSProviderSelector: React.FC<DNSProviderSelectorProps> = ({
     return (
       <View style={styles.container}>
         <View style={styles.sectionHeader}>
-          <Icon name="server" size={18} color="#06b6d4" />
-          <Text style={styles.sectionTitle}>DNS 服务商</Text>
+          <Icon name="server" size={18} color={colors.info} />
+          <Text style={[styles.sectionTitle, { color: colors.text.primary }]}>DNS 服务商</Text>
         </View>
 
         <View style={styles.collapsedContainer}>
-          <Text style={styles.currentLabel}>当前使用</Text>
+          <Text style={[styles.currentLabel, { color: colors.text.secondary }]}>当前使用</Text>
 
           {selectedProvider && (
             <DNSProviderCard
               provider={selectedProvider}
               isSelected={true}
-              onSelect={() => {}}
+              onSelect={() => { }}
               healthCheck={healthData.get(selectedProviderId)}
               compact={false}
             />
@@ -72,11 +74,11 @@ export const DNSProviderSelector: React.FC<DNSProviderSelectorProps> = ({
           <TouchableOpacity
             onPress={() => setExpanded(true)}
             activeOpacity={0.7}
-            style={styles.expandButton}
+            style={[styles.expandButton, { backgroundColor: colors.background.tertiary, borderColor: colors.border.focus }]}
           >
-            <Icon name="repeat" size={18} color="#06b6d4" />
-            <Text style={styles.expandButtonText}>切换到其他DNS服务商</Text>
-            <Icon name="chevron-right" size={18} color="#06b6d4" />
+            <Icon name="repeat" size={18} color={colors.info} />
+            <Text style={[styles.expandButtonText, { color: colors.info }]}>切换到其他DNS服务商</Text>
+            <Icon name="chevron-right" size={18} color={colors.info} />
           </TouchableOpacity>
         </View>
       </View>
@@ -86,16 +88,16 @@ export const DNSProviderSelector: React.FC<DNSProviderSelectorProps> = ({
   // 展开状态：显示所有DNS服务商
   return (
     <View style={styles.container}>
-      <View style={styles.expandedHeader}>
+      <View style={[styles.expandedHeader, { borderBottomColor: colors.border.subtle }]}>
         <TouchableOpacity onPress={() => setExpanded(false)} style={styles.backButton}>
-          <Icon name="chevron-left" size={20} color="#fff" />
+          <Icon name="chevron-left" size={20} color={colors.text.primary} />
         </TouchableOpacity>
-        <Text style={styles.expandedTitle}>选择DNS服务商</Text>
+        <Text style={[styles.expandedTitle, { color: colors.text.primary }]}>选择DNS服务商</Text>
         <TouchableOpacity onPress={performHealthCheck} disabled={isChecking}>
           {isChecking ? (
-            <ActivityIndicator size="small" color="#06b6d4" />
+            <ActivityIndicator size="small" color={colors.info} />
           ) : (
-            <Icon name="refresh-cw" size={20} color="#06b6d4" />
+            <Icon name="refresh-cw" size={20} color={colors.info} />
           )}
         </TouchableOpacity>
       </View>
@@ -105,8 +107,8 @@ export const DNSProviderSelector: React.FC<DNSProviderSelectorProps> = ({
         {chinaProviders.length > 0 && (
           <View style={styles.section}>
             <View style={styles.categoryHeader}>
-              <Text style={styles.categoryTitle}>国内优化 🇨🇳</Text>
-              <Text style={styles.categorySubtitle}>针对国内网络优化</Text>
+              <Text style={[styles.categoryTitle, { color: colors.text.primary }]}>国内优化 🇨🇳</Text>
+              <Text style={[styles.categorySubtitle, { color: colors.text.secondary }]}>针对国内网络优化</Text>
             </View>
 
             <View style={styles.gridContainer}>
@@ -129,8 +131,8 @@ export const DNSProviderSelector: React.FC<DNSProviderSelectorProps> = ({
         {globalProviders.length > 0 && (
           <View style={styles.section}>
             <View style={styles.categoryHeader}>
-              <Text style={styles.categoryTitle}>国际服务 🌍</Text>
-              <Text style={styles.categorySubtitle}>全球通用DNS服务</Text>
+              <Text style={[styles.categoryTitle, { color: colors.text.primary }]}>国际服务 🌍</Text>
+              <Text style={[styles.categorySubtitle, { color: colors.text.secondary }]}>全球通用DNS服务</Text>
             </View>
 
             <View style={styles.gridContainer}>
@@ -154,11 +156,11 @@ export const DNSProviderSelector: React.FC<DNSProviderSelectorProps> = ({
           <TouchableOpacity
             onPress={onAdvancedSettings}
             activeOpacity={0.7}
-            style={styles.advancedButton}
+            style={[styles.advancedButton, { backgroundColor: colors.background.secondary, borderColor: colors.border.default }]}
           >
-            <Icon name="settings" size={18} color="#94a3b8" />
-            <Text style={styles.advancedButtonText}>高级设置</Text>
-            <Icon name="chevron-right" size={18} color="#64748b" />
+            <Icon name="settings" size={18} color={colors.text.secondary} />
+            <Text style={[styles.advancedButtonText, { color: colors.text.secondary }]}>高级设置</Text>
+            <Icon name="chevron-right" size={18} color={colors.text.tertiary} />
           </TouchableOpacity>
         )}
 
@@ -181,7 +183,6 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#fff',
   },
 
   // 折叠状态样式
@@ -190,7 +191,6 @@ const styles = StyleSheet.create({
   },
   currentLabel: {
     fontSize: 13,
-    color: '#94a3b8',
     marginBottom: 4,
   },
   expandButton: {
@@ -200,14 +200,11 @@ const styles = StyleSheet.create({
     gap: 8,
     padding: 14,
     borderRadius: 12,
-    backgroundColor: 'rgba(6, 182, 212, 0.1)',
     borderWidth: 1,
-    borderColor: 'rgba(6, 182, 212, 0.2)',
   },
   expandButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#06b6d4',
     flex: 1,
   },
 
@@ -219,7 +216,6 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255, 255, 255, 0.05)',
   },
   backButton: {
     padding: 4,
@@ -227,7 +223,6 @@ const styles = StyleSheet.create({
   expandedTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#fff',
     flex: 1,
     textAlign: 'center',
   },
@@ -243,12 +238,10 @@ const styles = StyleSheet.create({
   categoryTitle: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#fff',
     marginBottom: 2,
   },
   categorySubtitle: {
     fontSize: 12,
-    color: '#64748b',
   },
   gridContainer: {
     flexDirection: 'row',
@@ -264,14 +257,11 @@ const styles = StyleSheet.create({
     gap: 8,
     padding: 14,
     borderRadius: 12,
-    backgroundColor: 'rgba(15, 23, 42, 0.5)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
     marginTop: 8,
   },
   advancedButtonText: {
     fontSize: 14,
-    color: '#94a3b8',
     flex: 1,
   },
   bottomPadding: {

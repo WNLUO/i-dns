@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Feather';
 import { responsive, scaleWidth, scaleHeight, scaleFont, scaleSpacing } from '../utils/responsive';
+import { useThemeColors } from '../styles/theme';
 
 const { height } = Dimensions.get('window');
 
@@ -26,21 +27,23 @@ export const FirstLaunchModal: React.FC<FirstLaunchModalProps> = ({
   onViewAgreement,
   onViewPrivacy,
 }) => {
+  const colors = useThemeColors();
+
   return (
     <Modal
       visible={visible}
       animationType="fade"
       transparent
-      onRequestClose={() => {}}
+      onRequestClose={() => { }}
     >
       <View style={styles.overlay}>
-        <View style={styles.modalContainer}>
-          <View style={styles.header}>
-            <View style={styles.iconContainer}>
-              <Icon name="shield" size={scaleWidth(40)} color="#3b82f6" />
+        <View style={[styles.modalContainer, { backgroundColor: colors.background.elevated }]}>
+          <View style={[styles.header, { backgroundColor: colors.background.tertiary }]}>
+            <View style={[styles.iconContainer, { backgroundColor: colors.info + '10' }]}>
+              <Icon name="shield" size={scaleWidth(40)} color={colors.info} />
             </View>
-            <Text style={styles.title}>欢迎使用 iDNS 家庭守护</Text>
-            <Text style={styles.subtitle}>网络安全教育工具</Text>
+            <Text style={[styles.title, { color: colors.text.primary }]}>欢迎使用 iDNS 家庭守护</Text>
+            <Text style={[styles.subtitle, { color: colors.text.secondary }]}>网络安全教育工具</Text>
           </View>
 
           <ScrollView
@@ -49,57 +52,57 @@ export const FirstLaunchModal: React.FC<FirstLaunchModalProps> = ({
           >
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
-                <Icon name="info" size={20} color="#06b6d4" />
-                <Text style={styles.sectionTitle}>重要说明</Text>
+                <Icon name="info" size={20} color={colors.info} />
+                <Text style={[styles.sectionTitle, { color: colors.text.primary }]}>重要说明</Text>
               </View>
 
               <View style={styles.point}>
-                <View style={styles.bullet} />
-                <Text style={styles.pointText}>
-                  本应用为<Text style={styles.highlight}>家庭网络安全教育工具</Text>，
+                <View style={[styles.bullet, { backgroundColor: colors.info }]} />
+                <Text style={[styles.pointText, { color: colors.text.secondary }]}>
+                  本应用为<Text style={[styles.highlight, { color: colors.info }]}>家庭网络安全教育工具</Text>，
                   帮助家长了解 DNS 过滤技术原理
                 </Text>
               </View>
 
               <View style={styles.point}>
-                <View style={styles.bullet} />
-                <Text style={styles.pointText}>
-                  界面展示的数据为<Text style={styles.highlight}>演示示例</Text>，
+                <View style={[styles.bullet, { backgroundColor: colors.info }]} />
+                <Text style={[styles.pointText, { color: colors.text.secondary }]}>
+                  界面展示的数据为<Text style={[styles.highlight, { color: colors.info }]}>演示示例</Text>，
                   用于教学和演示目的
                 </Text>
               </View>
 
               <View style={styles.point}>
-                <View style={styles.bullet} />
-                <Text style={styles.pointText}>
-                  实际网络防护需配合<Text style={styles.highlight}>路由器DNS设置</Text>或使用专业工具
+                <View style={[styles.bullet, { backgroundColor: colors.info }]} />
+                <Text style={[styles.pointText, { color: colors.text.secondary }]}>
+                  实际网络防护需配合<Text style={[styles.highlight, { color: colors.info }]}>路由器DNS设置</Text>或使用专业工具
                 </Text>
               </View>
 
               <View style={styles.point}>
-                <View style={styles.bullet} />
-                <Text style={styles.pointText}>
-                  我们<Text style={styles.highlight}>不保证</Text>过滤效果的准确性和完整性
+                <View style={[styles.bullet, { backgroundColor: colors.info }]} />
+                <Text style={[styles.pointText, { color: colors.text.secondary }]}>
+                  我们<Text style={[styles.highlight, { color: colors.info }]}>不保证</Text>过滤效果的准确性和完整性
                 </Text>
               </View>
 
               <View style={styles.point}>
-                <View style={styles.bullet} />
-                <Text style={styles.pointText}>
-                  本应用专注于<Text style={styles.highlight}>儿童保护</Text>和家庭网络安全教育
+                <View style={[styles.bullet, { backgroundColor: colors.info }]} />
+                <Text style={[styles.pointText, { color: colors.text.secondary }]}>
+                  本应用专注于<Text style={[styles.highlight, { color: colors.info }]}>儿童保护</Text>和家庭网络安全教育
                 </Text>
               </View>
             </View>
 
-            <View style={styles.divider} />
+            <View style={[styles.divider, { backgroundColor: colors.border.default }]} />
 
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Icon name="file-text" size={20} color="#8b5cf6" />
-                <Text style={styles.sectionTitle}>使用前须知</Text>
+                <Text style={[styles.sectionTitle, { color: colors.text.primary }]}>使用前须知</Text>
               </View>
 
-              <Text style={styles.agreementText}>
+              <Text style={[styles.agreementText, { color: colors.text.secondary }]}>
                 继续使用即表示您已阅读并同意：
               </Text>
 
@@ -108,8 +111,8 @@ export const FirstLaunchModal: React.FC<FirstLaunchModalProps> = ({
                 onPress={onViewAgreement}
                 activeOpacity={0.7}
               >
-                <Text style={styles.linkText}>《用户协议》</Text>
-                <Icon name="external-link" size={14} color="#3b82f6" />
+                <Text style={[styles.linkText, { color: colors.info }]}>《用户协议》</Text>
+                <Icon name="external-link" size={14} color={colors.info} />
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -117,20 +120,20 @@ export const FirstLaunchModal: React.FC<FirstLaunchModalProps> = ({
                 onPress={onViewPrivacy}
                 activeOpacity={0.7}
               >
-                <Text style={styles.linkText}>《隐私政策》</Text>
-                <Icon name="external-link" size={14} color="#3b82f6" />
+                <Text style={[styles.linkText, { color: colors.info }]}>《隐私政策》</Text>
+                <Icon name="external-link" size={14} color={colors.info} />
               </TouchableOpacity>
 
-              <Text style={styles.childProtectionNote}>
-                <Icon name="heart" size={14} color="#f43f5e" />{' '}
+              <Text style={[styles.childProtectionNote, { color: colors.status.error }]}>
+                <Icon name="heart" size={14} color={colors.status.error} />{' '}
                 我们特别重视儿童个人信息保护
               </Text>
             </View>
           </ScrollView>
 
-          <View style={styles.footer}>
+          <View style={[styles.footer, { backgroundColor: colors.background.tertiary }]}>
             <TouchableOpacity
-              style={styles.acceptButton}
+              style={[styles.acceptButton, { backgroundColor: colors.info }]}
               onPress={onAccept}
               activeOpacity={0.8}
             >
@@ -146,7 +149,7 @@ export const FirstLaunchModal: React.FC<FirstLaunchModalProps> = ({
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.95)',
+    backgroundColor: 'rgba(15, 23, 42, 0.95)', // Keep overlay dark
     justifyContent: 'center',
     alignItems: 'center',
     padding: scaleSpacing(20),
@@ -155,7 +158,6 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: scaleWidth(400),
     maxHeight: height * 0.85,
-    backgroundColor: '#1e293b',
     borderRadius: scaleSpacing(20),
     overflow: 'hidden',
     elevation: 5,
@@ -169,13 +171,11 @@ const styles = StyleSheet.create({
     paddingTop: scaleSpacing(32),
     paddingBottom: scaleSpacing(24),
     paddingHorizontal: scaleSpacing(24),
-    backgroundColor: '#0f172a',
   },
   iconContainer: {
     width: scaleWidth(80),
     height: scaleWidth(80),
     borderRadius: scaleWidth(40),
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: scaleSpacing(16),
@@ -183,13 +183,11 @@ const styles = StyleSheet.create({
   title: {
     fontSize: scaleFont(22),
     fontWeight: '700',
-    color: '#f1f5f9',
     marginBottom: scaleSpacing(8),
     textAlign: 'center',
   },
   subtitle: {
     fontSize: scaleFont(14),
-    color: '#94a3b8',
     textAlign: 'center',
   },
   content: {
@@ -207,7 +205,6 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: scaleFont(16),
     fontWeight: '600',
-    color: '#f1f5f9',
     marginLeft: scaleSpacing(8),
   },
   point: {
@@ -219,7 +216,6 @@ const styles = StyleSheet.create({
     width: scaleWidth(6),
     height: scaleWidth(6),
     borderRadius: scaleWidth(3),
-    backgroundColor: '#3b82f6',
     marginTop: scaleSpacing(6),
     marginRight: scaleSpacing(12),
   },
@@ -227,20 +223,16 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: scaleFont(14),
     lineHeight: scaleFont(20),
-    color: '#cbd5e1',
   },
   highlight: {
-    color: '#3b82f6',
     fontWeight: '600',
   },
   divider: {
     height: 1,
-    backgroundColor: '#334155',
     marginHorizontal: scaleSpacing(-24),
   },
   agreementText: {
     fontSize: scaleFont(14),
-    color: '#cbd5e1',
     marginBottom: scaleSpacing(12),
   },
   linkButton: {
@@ -251,23 +243,19 @@ const styles = StyleSheet.create({
   },
   linkText: {
     fontSize: scaleFont(14),
-    color: '#3b82f6',
     fontWeight: '600',
     marginRight: scaleSpacing(6),
   },
   childProtectionNote: {
     fontSize: scaleFont(13),
-    color: '#f43f5e',
     marginTop: scaleSpacing(12),
     paddingLeft: scaleSpacing(4),
   },
   footer: {
     padding: scaleSpacing(24),
     paddingTop: scaleSpacing(16),
-    backgroundColor: '#0f172a',
   },
   acceptButton: {
-    backgroundColor: '#3b82f6',
     borderRadius: scaleSpacing(12),
     paddingVertical: scaleSpacing(16),
     alignItems: 'center',

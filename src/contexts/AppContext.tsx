@@ -290,7 +290,49 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
 
     console.log('Setting up VPN status monitoring and AppState listener');
 
-    // 1. 监听 VPN 状态变化
+    // 1. 监听 VPN 权限请求结果 (Android)
+    const unsubscribePermissionResult = vpnService.onVPNPermissionResult(async (result) => {
+      console.log('========================================');
+      console.log('🔐 VPN permission result received:', result);
+      console.log('========================================');
+
+      if (result.success) {
+        console.log('✅ VPN started successfully after permission grant');
+        // 权限授予成功，VPN已启动，更新状态
+        try {
+          await storage.saveConnectionState(true);
+          setIsConnectedState(true);
+
+          // 设置初始DNS配置
+          console.log('⚙️ Setting Initial DNS Configuration');
+          const {DNS_SERVER_MAP} = await import('../constants');
+          const dnsConfig = DNS_SERVER_MAP[settings.selectedDnsProvider];
+
+          if (dnsConfig) {
+            // 仅使用UDP (DoH和DoT已移除)
+            const serverUrl = dnsConfig.udp;
+
+            if (serverUrl) {
+              await vpnService.updateDNSServer(serverUrl);
+              console.log('✅ DNS configured:', serverUrl);
+            }
+          }
+        } catch (error) {
+          console.error('❌ Failed to complete VPN setup:', error);
+        }
+      } else {
+        console.error('❌ VPN permission denied:', result.error);
+        // 权限被拒绝，确保状态为断开
+        try {
+          await storage.saveConnectionState(false);
+          setIsConnectedState(false);
+        } catch (error) {
+          console.error('Failed to save disconnected state:', error);
+        }
+      }
+    });
+
+    // 2. 监听 VPN 状态变化
     const unsubscribeVPNStatus = vpnService.onVPNStatusChanged(async (connected: boolean) => {
       // 防抖：如果状态相同，跳过处理
       if (lastVPNStatusRef.current === connected) {
@@ -392,6 +434,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
     // Cleanup
     return () => {
       console.log('Cleaning up VPN status monitoring and AppState listener');
+      unsubscribePermissionResult();
       unsubscribeVPNStatus();
       subscription.remove();
     };
@@ -454,16 +497,8 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
           const protocol = updates.selectedProtocol || newSettings.selectedProtocol;
           let serverUrl: string | undefined;
 
-          if (protocol === 'doh' && dnsConfig.doh) {
-            serverUrl = dnsConfig.doh;
-          } else if (protocol === 'dot' && dnsConfig.dot) {
-            serverUrl = dnsConfig.dot;
-          } else if (protocol === 'udp' && dnsConfig.udp) {
-            serverUrl = dnsConfig.udp;
-          } else {
-            // 自动选择：优先DoH > DoT > UDP
-            serverUrl = dnsConfig.doh || dnsConfig.dot || dnsConfig.udp;
-          }
+          // 仅使用UDP (DoH和DoT已移除)
+          serverUrl = dnsConfig.udp;
 
           console.log(`Protocol: ${protocol || 'auto'}`);
           console.log(`DNS Server: ${serverUrl}`);
@@ -505,8 +540,24 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
         // 启动 VPN（如果可用）
         if (vpnService.isAvailable()) {
           try {
-            await vpnService.start();
-            console.log('VPN service started successfully');
+            const result = await vpnService.start();
+            console.log('VPN start result:', result);
+
+            // 检查是否需要权限
+            if (result.requiresPermission) {
+              console.log('⏳ VPN permission request initiated, waiting for user response...');
+              // 权限请求已发起，状态会通过 VPNPermissionResult 事件更新
+              // 暂时不更新状态，等待权限结果
+              return;
+            }
+
+            // 如果不需要权限但启动失败
+            if (!result.success) {
+              console.error('❌ VPN failed to start immediately');
+              throw new Error('Failed to start VPN');
+            }
+
+            console.log('✅ VPN service started successfully');
 
             // 启动后立即设置当前选择的DNS服务器
             console.log('========================================');
@@ -521,18 +572,10 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
               const protocol = settings.selectedProtocol;
               let serverUrl: string | undefined;
 
-              if (protocol === 'doh' && dnsConfig.doh) {
-                serverUrl = dnsConfig.doh;
-              } else if (protocol === 'dot' && dnsConfig.dot) {
-                serverUrl = dnsConfig.dot;
-              } else if (protocol === 'udp' && dnsConfig.udp) {
-                serverUrl = dnsConfig.udp;
-              } else {
-                // 自动选择：优先DoH > DoT > UDP
-                serverUrl = dnsConfig.doh || dnsConfig.dot || dnsConfig.udp;
-              }
+              // 仅使用UDP (DoH和DoT已移除)
+              serverUrl = dnsConfig.udp;
 
-              console.log(`Protocol: ${protocol || 'auto'}`);
+              console.log(`Protocol: UDP`);
               console.log(`DNS Server: ${serverUrl}`);
 
               if (serverUrl) {

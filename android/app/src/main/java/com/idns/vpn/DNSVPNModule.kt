@@ -1,20 +1,31 @@
 package com.idns.vpn
 
+import android.Manifest
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.*
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import com.facebook.react.modules.core.PermissionAwareActivity
+import com.facebook.react.modules.core.PermissionListener
 
 class DNSVPNModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaModule(reactContext) {
 
     companion object {
         private const val TAG = "DNSVPNModule"
         const val VPN_PERMISSION_REQUEST_CODE = 1001
+        const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1002
     }
+
+    private var vpnStartPromise: Promise? = null
+    private var notificationPermissionPromise: Promise? = null
 
     private var hasListeners = false
     private val dnsEventReceiver = object : BroadcastReceiver() {
@@ -67,22 +78,107 @@ class DNSVPNModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
     fun startVPN(promise: Promise) {
         try {
             val activity = reactApplicationContext.currentActivity
-            val intent = VpnService.prepare(activity)
 
-            if (intent != null) {
-                // Need to request VPN permission
-                activity?.let {
-                    it.startActivityForResult(intent, VPN_PERMISSION_REQUEST_CODE)
-
-                    // Wait for permission result
-                    // In a real implementation, you would use onActivityResult callback
-                    // For now, we'll just resolve the promise
-                    promise.resolve(false)
-                }
+            if (activity == null) {
+                promise.reject("VPN_START_ERROR", "Activity not available")
                 return
             }
 
-            // Permission already granted, start VPN service
+            // Android 13+ (API 33+) requires notification permission for foreground services
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                if (ContextCompat.checkSelfPermission(
+                        reactApplicationContext,
+                        Manifest.permission.POST_NOTIFICATIONS
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    // Request notification permission first
+                    vpnStartPromise = promise
+                    requestNotificationPermission(activity)
+                    return
+                }
+            }
+
+            // Check VPN permission
+            val vpnIntent = VpnService.prepare(activity)
+            if (vpnIntent != null) {
+                // Need to request VPN permission
+                // Result will be handled in MainActivity.onActivityResult
+                activity.startActivityForResult(vpnIntent, VPN_PERMISSION_REQUEST_CODE)
+                // Return immediately - result will come via VPNPermissionResult event
+                val result = Arguments.createMap()
+                result.putBoolean("requiresPermission", true)
+                promise.resolve(result)
+                return
+            }
+
+            // Both permissions granted, start VPN service
+            startVPNService()
+            val result = Arguments.createMap()
+            result.putBoolean("requiresPermission", false)
+            result.putBoolean("success", true)
+            promise.resolve(result)
+
+        } catch (e: Exception) {
+            promise.reject("VPN_START_ERROR", "Failed to start VPN: ${e.message}", e)
+        }
+    }
+
+    /**
+     * Request notification permission for Android 13+
+     */
+    private fun requestNotificationPermission(activity: Activity) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (activity is PermissionAwareActivity) {
+                val permissionListener = object : PermissionListener {
+                    override fun onRequestPermissionsResult(
+                        requestCode: Int,
+                        permissions: Array<String>,
+                        grantResults: IntArray
+                    ): Boolean {
+                        if (requestCode == NOTIFICATION_PERMISSION_REQUEST_CODE) {
+                            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                                // Permission granted, now check VPN permission
+                                val vpnIntent = VpnService.prepare(activity)
+                                if (vpnIntent != null) {
+                                    activity.startActivityForResult(vpnIntent, VPN_PERMISSION_REQUEST_CODE)
+                                } else {
+                                    startVPNService()
+                                    vpnStartPromise?.resolve(true)
+                                    vpnStartPromise = null
+                                }
+                            } else {
+                                vpnStartPromise?.reject(
+                                    "NOTIFICATION_PERMISSION_DENIED",
+                                    "需要通知权限才能运行VPN服务"
+                                )
+                                vpnStartPromise = null
+                            }
+                            return true
+                        }
+                        return false
+                    }
+                }
+
+                activity.requestPermissions(
+                    arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                    NOTIFICATION_PERMISSION_REQUEST_CODE,
+                    permissionListener
+                )
+            } else {
+                vpnStartPromise?.reject(
+                    "PERMISSION_ERROR",
+                    "无法请求权限: Activity 不支持权限请求"
+                )
+                vpnStartPromise = null
+            }
+        }
+    }
+
+    /**
+     * Start VPN service
+     */
+    private fun startVPNService() {
+        try {
             val serviceIntent = Intent(reactApplicationContext, DNSVpnService::class.java)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -90,11 +186,8 @@ class DNSVPNModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
             } else {
                 reactApplicationContext.startService(serviceIntent)
             }
-
-            promise.resolve(true)
-
         } catch (e: Exception) {
-            promise.reject("VPN_START_ERROR", "Failed to start VPN: ${e.message}", e)
+            throw Exception("启动VPN服务失败: ${e.message}", e)
         }
     }
 
@@ -120,6 +213,40 @@ class DNSVPNModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
 
         } catch (e: Exception) {
             promise.reject("VPN_STATUS_ERROR", "Failed to get VPN status: ${e.message}", e)
+        }
+    }
+
+    @ReactMethod
+    fun checkNotificationPermission(promise: Promise) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val hasPermission = ContextCompat.checkSelfPermission(
+                    reactApplicationContext,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+                promise.resolve(hasPermission)
+            } else {
+                // Notification permission not required for older Android versions
+                promise.resolve(true)
+            }
+        } catch (e: Exception) {
+            promise.reject("PERMISSION_CHECK_ERROR", "Failed to check notification permission: ${e.message}", e)
+        }
+    }
+
+    @ReactMethod
+    fun checkVPNPermission(promise: Promise) {
+        try {
+            val activity = reactApplicationContext.currentActivity
+            if (activity == null) {
+                promise.reject("VPN_PERMISSION_CHECK_ERROR", "Activity not available")
+                return
+            }
+
+            val vpnIntent = VpnService.prepare(activity)
+            promise.resolve(vpnIntent == null)
+        } catch (e: Exception) {
+            promise.reject("VPN_PERMISSION_CHECK_ERROR", "Failed to check VPN permission: ${e.message}", e)
         }
     }
 
@@ -195,6 +322,53 @@ class DNSVPNModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
 
         } catch (e: Exception) {
             promise.reject("VPN_ERROR", "Failed to update DNS server: ${e.message}", e)
+        }
+    }
+
+    @ReactMethod
+    fun getVPNLogFilePath(promise: Promise) {
+        try {
+            val logPath = VpnLogger.getLogFilePath()
+            promise.resolve(logPath)
+        } catch (e: Exception) {
+            promise.reject("LOG_ERROR", "Failed to get log file path: ${e.message}", e)
+        }
+    }
+
+    @ReactMethod
+    fun getAllVPNLogFiles(promise: Promise) {
+        try {
+            val logFiles = VpnLogger.getAllLogFiles(reactApplicationContext)
+            val result = Arguments.createArray()
+
+            logFiles.forEach { file ->
+                val fileInfo = Arguments.createMap()
+                fileInfo.putString("path", file.absolutePath)
+                fileInfo.putString("name", file.name)
+                fileInfo.putDouble("size", file.length().toDouble())
+                fileInfo.putDouble("lastModified", file.lastModified().toDouble())
+                result.pushMap(fileInfo)
+            }
+
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("LOG_ERROR", "Failed to get log files: ${e.message}", e)
+        }
+    }
+
+    @ReactMethod
+    fun readVPNLogFile(filePath: String, promise: Promise) {
+        try {
+            val file = java.io.File(filePath)
+            if (!file.exists()) {
+                promise.reject("LOG_ERROR", "Log file does not exist: $filePath")
+                return
+            }
+
+            val content = VpnLogger.readLogFile(file)
+            promise.resolve(content)
+        } catch (e: Exception) {
+            promise.reject("LOG_ERROR", "Failed to read log file: ${e.message}", e)
         }
     }
 

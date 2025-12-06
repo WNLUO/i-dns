@@ -4,7 +4,9 @@ import Icon from 'react-native-vector-icons/Feather';
 import { AppSettings, DnsProtocol } from '../types';
 import { DNS_PROVIDERS, DNS_SERVER_MAP } from '../constants';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { responsive, getPagePadding } from '../utils/responsive';
+import { responsive } from '../utils/responsive';
+import { useResponsiveLayout } from '../hooks/useResponsiveLayout';
+import { useThemeColors } from '../styles/theme';
 
 interface DNSAdvancedSettingsProps {
   settings: AppSettings;
@@ -18,6 +20,8 @@ export const DNSAdvancedSettings: React.FC<DNSAdvancedSettingsProps> = ({
   onBack
 }) => {
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
+  const { pagePadding } = useResponsiveLayout();
 
   const availableFallbacks = DNS_PROVIDERS.filter(
     p => p.id !== settings.selectedDnsProvider
@@ -69,238 +73,243 @@ export const DNSAdvancedSettings: React.FC<DNSAdvancedSettingsProps> = ({
   const selectedProviderProtocols = getAvailableProtocols(settings.selectedDnsProvider);
 
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={[
-        styles.content,
-        {
-          paddingTop: Math.max(insets.top, 20) + responsive.spacing.lg,
-          paddingBottom: Math.max(insets.bottom, 20) + 100,
-        }
-      ]}
-      showsVerticalScrollIndicator={false}
-    >
-      {/* Header */}
-      <View style={styles.header}>
+    <View style={[styles.container, { backgroundColor: colors.background.primary }]}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 20) + responsive.spacing.lg, paddingHorizontal: pagePadding }]}>
         <TouchableOpacity onPress={onBack} style={styles.backButton}>
-          <Icon name="chevron-left" size={24} color="#fff" />
+          <Icon name="chevron-left" size={24} color={colors.text.primary} />
         </TouchableOpacity>
-        <Text style={styles.title}>DNS 高级设置</Text>
+        <Text style={[styles.title, { color: colors.text.primary }]}>DNS 高级设置</Text>
       </View>
 
-      {/* 协议选择 */}
-      {selectedProviderProtocols.length > 1 && (
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          {
+            paddingBottom: Math.max(insets.bottom, 20) + 20,
+            paddingHorizontal: pagePadding
+          }
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* 协议选择 */}
+        {selectedProviderProtocols.length > 1 && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Icon name="radio" size={18} color={colors.info} />
+              <Text style={[styles.sectionTitle, { color: colors.text.primary }]}>协议选择</Text>
+            </View>
+
+            <View style={[styles.card, { backgroundColor: colors.background.elevated, borderColor: colors.border.default }]}>
+              <Text style={[styles.cardLabel, { color: colors.text.primary }]}>当前DNS支持的协议</Text>
+              <View style={styles.protocolOptions}>
+                {selectedProviderProtocols.map(protocol => {
+                  const isSelected = settings.selectedProtocol === protocol ||
+                    (!settings.selectedProtocol && protocol === 'doh');
+                  return (
+                    <TouchableOpacity
+                      key={protocol}
+                      onPress={() => onUpdateSettings({ selectedProtocol: protocol })}
+                      activeOpacity={0.7}
+                      style={[
+                        styles.protocolOption,
+                        { backgroundColor: colors.background.secondary },
+                        isSelected && { backgroundColor: colors.background.tertiary, borderColor: colors.border.focus }
+                      ]}
+                    >
+                      <Text style={[
+                        styles.protocolLabel,
+                        { color: colors.text.secondary },
+                        isSelected && { color: colors.info }
+                      ]}>
+                        {protocol.toUpperCase()}
+                      </Text>
+                      {isSelected && (
+                        <Icon name="check" size={14} color={colors.info} />
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+              <Text style={[styles.protocolDesc, { color: colors.text.tertiary }]}>
+                DoH: 加密DNS，隐私最佳 | DoT: 加密DNS，使用853端口 | UDP: 传统DNS，速度快
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* 自动故障转移 */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Icon name="radio" size={18} color="#06b6d4" />
-            <Text style={styles.sectionTitle}>协议选择</Text>
+            <Icon name="shuffle" size={18} color={colors.status.active} />
+            <Text style={[styles.sectionTitle, { color: colors.text.primary }]}>故障转移</Text>
           </View>
 
-          <View style={styles.card}>
-            <Text style={styles.cardLabel}>当前DNS支持的协议</Text>
-            <View style={styles.protocolOptions}>
-              {selectedProviderProtocols.map(protocol => {
-                const isSelected = settings.selectedProtocol === protocol ||
-                  (!settings.selectedProtocol && protocol === 'doh');
+          <View style={[styles.card, { backgroundColor: colors.background.elevated, borderColor: colors.border.default }]}>
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <Text style={[styles.settingLabel, { color: colors.text.primary }]}>自动故障转移</Text>
+                <Text style={[styles.settingDesc, { color: colors.text.secondary }]}>主DNS失败时自动切换到备用DNS</Text>
+              </View>
+              <Switch
+                value={settings.autoFallback}
+                onValueChange={(value) => onUpdateSettings({ autoFallback: value })}
+                trackColor={{ false: colors.background.input, true: colors.info }}
+                thumbColor="#fff"
+              />
+            </View>
+
+            {settings.autoFallback && (
+              <>
+                <View style={[styles.divider, { backgroundColor: colors.border.default }]} />
+
+                <Text style={[styles.fallbackLabel, { color: colors.text.primary }]}>备用DNS列表（按优先级）</Text>
+
+                {(settings.customFallbackList || []).length > 0 ? (
+                  <View style={styles.fallbackList}>
+                    {settings.customFallbackList!.map((providerId, index) => (
+                      <View key={providerId} style={[styles.fallbackItem, { backgroundColor: colors.background.secondary, borderColor: colors.border.default }]}>
+                        <Text style={[styles.fallbackIndex, { color: colors.info }]}>{index + 1}.</Text>
+                        <Text style={[styles.fallbackName, { color: colors.text.primary }]}>{getProviderName(providerId)}</Text>
+
+                        <View style={styles.fallbackActions}>
+                          <TouchableOpacity
+                            onPress={() => moveFallbackUp(index)}
+                            disabled={index === 0}
+                            style={styles.actionButton}
+                          >
+                            <Icon
+                              name="chevron-up"
+                              size={16}
+                              color={index === 0 ? colors.text.disabled : colors.text.secondary}
+                            />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            onPress={() => moveFallbackDown(index)}
+                            disabled={index === settings.customFallbackList!.length - 1}
+                            style={styles.actionButton}
+                          >
+                            <Icon
+                              name="chevron-down"
+                              size={16}
+                              color={index === settings.customFallbackList!.length - 1 ? colors.text.disabled : colors.text.secondary}
+                            />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            onPress={() => removeFallback(providerId)}
+                            style={styles.actionButton}
+                          >
+                            <Icon name="x" size={16} color={colors.status.error} />
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Text style={[styles.emptyFallback, { color: colors.text.tertiary }]}>暂无备用DNS，将使用系统默认配置</Text>
+                )}
+
+                <View style={styles.addFallbackSection}>
+                  <Text style={[styles.addFallbackLabel, { color: colors.text.secondary }]}>添加备用DNS</Text>
+                  {availableFallbacks.map(provider => (
+                    <TouchableOpacity
+                      key={provider.id}
+                      onPress={() => toggleFallback(provider.id)}
+                      activeOpacity={0.7}
+                      style={[styles.addFallbackItem, { backgroundColor: colors.background.secondary }]}
+                      disabled={(settings.customFallbackList || []).includes(provider.id)}
+                    >
+                      <Text style={[
+                        styles.addFallbackName,
+                        { color: colors.text.primary },
+                        (settings.customFallbackList || []).includes(provider.id) && { color: colors.text.disabled }
+                      ]}>
+                        {provider.name}
+                      </Text>
+                      {(settings.customFallbackList || []).includes(provider.id) ? (
+                        <Icon name="check" size={16} color={colors.info} />
+                      ) : (
+                        <Icon name="plus" size={16} color={colors.text.tertiary} />
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+
+        {/* 健康检查 */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Icon name="activity" size={18} color={colors.status.warning} />
+            <Text style={[styles.sectionTitle, { color: colors.text.primary }]}>健康检查</Text>
+          </View>
+
+          <View style={[styles.card, { backgroundColor: colors.background.elevated, borderColor: colors.border.default }]}>
+            <Text style={[styles.cardLabel, { color: colors.text.primary }]}>检查间隔</Text>
+            <View style={styles.intervalOptions}>
+              {[
+                { value: 300, label: '5分钟' },
+                { value: 600, label: '10分钟' },
+                { value: 1800, label: '30分钟' },
+                { value: 0, label: '关闭' }
+              ].map(option => {
+                const isSelected = settings.healthCheckInterval === option.value;
                 return (
                   <TouchableOpacity
-                    key={protocol}
-                    onPress={() => onUpdateSettings({ selectedProtocol: protocol })}
+                    key={option.value}
+                    onPress={() => onUpdateSettings({ healthCheckInterval: option.value })}
                     activeOpacity={0.7}
                     style={[
-                      styles.protocolOption,
-                      isSelected && styles.protocolOptionSelected
+                      styles.intervalOption,
+                      { backgroundColor: colors.background.secondary },
+                      isSelected && { backgroundColor: colors.status.warning + '20', borderColor: colors.status.warning }
                     ]}
                   >
                     <Text style={[
-                      styles.protocolLabel,
-                      isSelected && styles.protocolLabelSelected
+                      styles.intervalLabel,
+                      { color: colors.text.secondary },
+                      isSelected && { color: colors.status.warning }
                     ]}>
-                      {protocol.toUpperCase()}
+                      {option.label}
                     </Text>
-                    {isSelected && (
-                      <Icon name="check" size={14} color="#06b6d4" />
-                    )}
                   </TouchableOpacity>
                 );
               })}
             </View>
-            <Text style={styles.protocolDesc}>
-              DoH: 加密DNS，隐私最佳 | DoT: 加密DNS，使用853端口 | UDP: 传统DNS，速度快
-            </Text>
+            <Text style={[styles.intervalDesc, { color: colors.text.secondary }]}>定期检测DNS服务器的可用性和延迟</Text>
           </View>
         </View>
-      )}
 
-      {/* 自动故障转移 */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Icon name="shuffle" size={18} color="#10b981" />
-          <Text style={styles.sectionTitle}>故障转移</Text>
-        </View>
-
-        <View style={styles.card}>
-          <View style={styles.settingRow}>
-            <View style={styles.settingInfo}>
-              <Text style={styles.settingLabel}>自动故障转移</Text>
-              <Text style={styles.settingDesc}>主DNS失败时自动切换到备用DNS</Text>
-            </View>
-            <Switch
-              value={settings.autoFallback}
-              onValueChange={(value) => onUpdateSettings({ autoFallback: value })}
-              trackColor={{ false: '#334155', true: '#06b6d4' }}
-              thumbColor="#fff"
-            />
+        {/* 智能优选 */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Icon name="zap" size={18} color="#8b5cf6" />
+            <Text style={[styles.sectionTitle, { color: colors.text.primary }]}>智能优选</Text>
           </View>
 
-          {settings.autoFallback && (
-            <>
-              <View style={styles.divider} />
-
-              <Text style={styles.fallbackLabel}>备用DNS列表（按优先级）</Text>
-
-              {(settings.customFallbackList || []).length > 0 ? (
-                <View style={styles.fallbackList}>
-                  {settings.customFallbackList!.map((providerId, index) => (
-                    <View key={providerId} style={styles.fallbackItem}>
-                      <Text style={styles.fallbackIndex}>{index + 1}.</Text>
-                      <Text style={styles.fallbackName}>{getProviderName(providerId)}</Text>
-
-                      <View style={styles.fallbackActions}>
-                        <TouchableOpacity
-                          onPress={() => moveFallbackUp(index)}
-                          disabled={index === 0}
-                          style={styles.actionButton}
-                        >
-                          <Icon
-                            name="chevron-up"
-                            size={16}
-                            color={index === 0 ? '#475569' : '#94a3b8'}
-                          />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          onPress={() => moveFallbackDown(index)}
-                          disabled={index === settings.customFallbackList!.length - 1}
-                          style={styles.actionButton}
-                        >
-                          <Icon
-                            name="chevron-down"
-                            size={16}
-                            color={index === settings.customFallbackList!.length - 1 ? '#475569' : '#94a3b8'}
-                          />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          onPress={() => removeFallback(providerId)}
-                          style={styles.actionButton}
-                        >
-                          <Icon name="x" size={16} color="#ef4444" />
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              ) : (
-                <Text style={styles.emptyFallback}>暂无备用DNS，将使用系统默认配置</Text>
-              )}
-
-              <View style={styles.addFallbackSection}>
-                <Text style={styles.addFallbackLabel}>添加备用DNS</Text>
-                {availableFallbacks.map(provider => (
-                  <TouchableOpacity
-                    key={provider.id}
-                    onPress={() => toggleFallback(provider.id)}
-                    activeOpacity={0.7}
-                    style={styles.addFallbackItem}
-                    disabled={(settings.customFallbackList || []).includes(provider.id)}
-                  >
-                    <Text style={[
-                      styles.addFallbackName,
-                      (settings.customFallbackList || []).includes(provider.id) && styles.addFallbackNameDisabled
-                    ]}>
-                      {provider.name}
-                    </Text>
-                    {(settings.customFallbackList || []).includes(provider.id) ? (
-                      <Icon name="check" size={16} color="#06b6d4" />
-                    ) : (
-                      <Icon name="plus" size={16} color="#94a3b8" />
-                    )}
-                  </TouchableOpacity>
-                ))}
+          <View style={[styles.card, { backgroundColor: colors.background.elevated, borderColor: colors.border.default }]}>
+            <View style={styles.settingRow}>
+              <View style={styles.settingInfo}>
+                <Text style={[styles.settingLabel, { color: colors.text.primary }]}>智能选择最优DNS</Text>
+                <Text style={[styles.settingDesc, { color: colors.text.secondary }]}>自动选择延迟最低的DNS服务器</Text>
               </View>
-            </>
-          )}
-        </View>
-      </View>
-
-      {/* 健康检查 */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Icon name="activity" size={18} color="#f59e0b" />
-          <Text style={styles.sectionTitle}>健康检查</Text>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardLabel}>检查间隔</Text>
-          <View style={styles.intervalOptions}>
-            {[
-              { value: 300, label: '5分钟' },
-              { value: 600, label: '10分钟' },
-              { value: 1800, label: '30分钟' },
-              { value: 0, label: '关闭' }
-            ].map(option => {
-              const isSelected = settings.healthCheckInterval === option.value;
-              return (
-                <TouchableOpacity
-                  key={option.value}
-                  onPress={() => onUpdateSettings({ healthCheckInterval: option.value })}
-                  activeOpacity={0.7}
-                  style={[
-                    styles.intervalOption,
-                    isSelected && styles.intervalOptionSelected
-                  ]}
-                >
-                  <Text style={[
-                    styles.intervalLabel,
-                    isSelected && styles.intervalLabelSelected
-                  ]}>
-                    {option.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-          <Text style={styles.intervalDesc}>定期检测DNS服务器的可用性和延迟</Text>
-        </View>
-      </View>
-
-      {/* 智能优选 */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeader}>
-          <Icon name="zap" size={18} color="#8b5cf6" />
-          <Text style={styles.sectionTitle}>智能优选</Text>
-        </View>
-
-        <View style={styles.card}>
-          <View style={styles.settingRow}>
-            <View style={styles.settingInfo}>
-              <Text style={styles.settingLabel}>智能选择最优DNS</Text>
-              <Text style={styles.settingDesc}>自动选择延迟最低的DNS服务器</Text>
+              <Switch
+                value={settings.smartSelection}
+                onValueChange={(value) => onUpdateSettings({ smartSelection: value })}
+                trackColor={{ false: colors.background.input, true: '#8b5cf6' }}
+                thumbColor="#fff"
+              />
             </View>
-            <Switch
-              value={settings.smartSelection}
-              onValueChange={(value) => onUpdateSettings({ smartSelection: value })}
-              trackColor={{ false: '#334155', true: '#8b5cf6' }}
-              thumbColor="#fff"
-            />
+            {settings.smartSelection && (
+              <Text style={styles.smartSelectionWarning}>
+                ⚠️ 启用后将忽略手动选择的DNS，自动使用性能最佳的服务器
+              </Text>
+            )}
           </View>
-          {settings.smartSelection && (
-            <Text style={styles.smartSelectionWarning}>
-              ⚠️ 启用后将忽略手动选择的DNS，自动使用性能最佳的服务器
-            </Text>
-          )}
         </View>
-      </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 };
 
@@ -309,7 +318,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    padding: getPagePadding(),
+    // padding set dynamically
   },
   header: {
     flexDirection: 'row',
@@ -323,7 +332,6 @@ const styles = StyleSheet.create({
   title: {
     fontSize: responsive.fontSize['3xl'],
     fontWeight: '700',
-    color: '#fff',
   },
   section: {
     marginBottom: 24,
@@ -337,19 +345,19 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#fff',
   },
   card: {
-    backgroundColor: 'rgba(15, 23, 42, 0.5)',
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   cardLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#fff',
     marginBottom: 12,
   },
   settingRow: {
@@ -364,16 +372,13 @@ const styles = StyleSheet.create({
   settingLabel: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#fff',
     marginBottom: 2,
   },
   settingDesc: {
     fontSize: 12,
-    color: '#94a3b8',
   },
   divider: {
     height: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
     marginVertical: 16,
   },
   protocolOptions: {
@@ -388,32 +393,21 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 10,
     borderRadius: 8,
-    backgroundColor: 'rgba(51, 65, 85, 0.5)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
+    borderColor: 'transparent',
     gap: 6,
-  },
-  protocolOptionSelected: {
-    backgroundColor: 'rgba(6, 182, 212, 0.15)',
-    borderColor: 'rgba(6, 182, 212, 0.3)',
   },
   protocolLabel: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#94a3b8',
-  },
-  protocolLabelSelected: {
-    color: '#06b6d4',
   },
   protocolDesc: {
     fontSize: 11,
-    color: '#64748b',
     lineHeight: 16,
   },
   fallbackLabel: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#fff',
     marginBottom: 8,
   },
   fallbackList: {
@@ -425,19 +419,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 10,
     borderRadius: 8,
-    backgroundColor: 'rgba(51, 65, 85, 0.3)',
+    borderWidth: 1,
     gap: 8,
   },
   fallbackIndex: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#06b6d4',
     width: 20,
   },
   fallbackName: {
     flex: 1,
     fontSize: 13,
-    color: '#fff',
   },
   fallbackActions: {
     flexDirection: 'row',
@@ -448,7 +440,6 @@ const styles = StyleSheet.create({
   },
   emptyFallback: {
     fontSize: 12,
-    color: '#64748b',
     textAlign: 'center',
     paddingVertical: 16,
   },
@@ -457,7 +448,6 @@ const styles = StyleSheet.create({
   },
   addFallbackLabel: {
     fontSize: 12,
-    color: '#94a3b8',
     marginBottom: 4,
   },
   addFallbackItem: {
@@ -466,14 +456,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     padding: 10,
     borderRadius: 8,
-    backgroundColor: 'rgba(51, 65, 85, 0.3)',
   },
   addFallbackName: {
     fontSize: 13,
-    color: '#fff',
-  },
-  addFallbackNameDisabled: {
-    color: '#64748b',
   },
   intervalOptions: {
     flexDirection: 'row',
@@ -485,25 +470,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 8,
-    backgroundColor: 'rgba(51, 65, 85, 0.5)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-  },
-  intervalOptionSelected: {
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
-    borderColor: 'rgba(245, 158, 11, 0.3)',
+    borderColor: 'transparent',
   },
   intervalLabel: {
     fontSize: 13,
     fontWeight: '500',
-    color: '#94a3b8',
-  },
-  intervalLabelSelected: {
-    color: '#f59e0b',
   },
   intervalDesc: {
     fontSize: 11,
-    color: '#64748b',
   },
   smartSelectionWarning: {
     marginTop: 12,

@@ -3,52 +3,49 @@ import { View, Text, TouchableOpacity, StyleSheet, Animated, ScrollView } from '
 import Icon from 'react-native-vector-icons/Feather';
 import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { responsive, getPagePadding, scaleWidth, scaleHeight, responsiveValue, formatNumber, formatLatency } from '../utils/responsive';
+import { useResponsiveLayout } from '../hooks/useResponsiveLayout';
+import { formatNumber, formatLatency } from '../utils/responsive';
 import { useApp } from '../contexts/AppContext';
+import { useThemeColors } from '../styles/theme';
 
 export const HomeView: React.FC = () => {
-  // Hook顺序很重要！useSafeAreaInsets使用useContext，必须在所有其他hooks之前
   const insets = useSafeAreaInsets();
   const { isConnected, setIsConnected, todayStatistics, latestLatency } = useApp();
+  const colors = useThemeColors();
+  const { isTablet, isLandscape, width, pagePadding, responsiveValue, scaleWidth } = useResponsiveLayout();
 
   const [scaleAnim] = useState(new Animated.Value(1));
-  const [glowAnim] = useState(new Animated.Value(0));
-  const [rotateAnim] = useState(new Animated.Value(0));
+  const [pulseAnim] = useState(new Animated.Value(1));
+
+  // Determine layout mode
+  const isSplitLayout = isLandscape; // Tablet landscape or phone landscape
+  const isTabletPortrait = isTablet && !isLandscape;
 
   useEffect(() => {
     if (isConnected) {
       Animated.loop(
         Animated.sequence([
-          Animated.timing(glowAnim, {
-            toValue: 1,
-            duration: 2000,
+          Animated.timing(pulseAnim, {
+            toValue: 1.1,
+            duration: 1500,
             useNativeDriver: true,
           }),
-          Animated.timing(glowAnim, {
-            toValue: 0,
-            duration: 2000,
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 1500,
             useNativeDriver: true,
           }),
         ])
       ).start();
-
-      Animated.loop(
-        Animated.timing(rotateAnim, {
-          toValue: 1,
-          duration: 8000,
-          useNativeDriver: true,
-        })
-      ).start();
     } else {
-      glowAnim.setValue(0);
-      rotateAnim.setValue(0);
+      pulseAnim.setValue(1);
     }
   }, [isConnected]);
 
   const handlePress = async () => {
     Animated.sequence([
       Animated.timing(scaleAnim, {
-        toValue: 0.92,
+        toValue: 0.95,
         duration: 100,
         useNativeDriver: true,
       }),
@@ -66,94 +63,61 @@ export const HomeView: React.FC = () => {
     }
   };
 
-  const rotate = rotateAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['0deg', '360deg'],
-  });
-
-  const glowOpacity = glowAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.3, 0.8],
-  });
-
-  return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={[
-        styles.content,
-        {
-          paddingTop: Math.max(insets.top, 20) + responsive.spacing.lg,
-          paddingBottom: Math.max(insets.bottom, 20) + 100,
-        }
-      ]}
-      showsVerticalScrollIndicator={false}
-    >
-      {/* Status Card */}
-      <View style={styles.statusCard}>
+  const StatusCard = () => (
+    <View style={[styles.statusCard, { backgroundColor: colors.background.elevated, borderColor: colors.border.default }]}>
+      <View style={styles.statusHeader}>
         <View style={[
           styles.statusDot,
-          { backgroundColor: isConnected ? '#10b981' : '#475569' }
+          { backgroundColor: isConnected ? colors.status.active : colors.status.inactive }
         ]} />
-        <View style={styles.statusInfo}>
-          <Text style={styles.statusLabel} numberOfLines={1}>守护状态</Text>
-          <Text style={styles.statusValue} numberOfLines={1}>
-            {isConnected ? '守护中' : '已停止'}
-          </Text>
-        </View>
-        <View style={styles.statusLatency}>
-          <Text style={styles.latencyNumber} numberOfLines={1}>
-            {isConnected && latestLatency > 0
-              ? (() => {
-                  const latency = formatLatency(latestLatency);
-                  return `${latency.value}${latency.unit}`;
-                })()
-              : '--'}
-          </Text>
-          <Text style={styles.latencyLabel} numberOfLines={1}>延迟</Text>
-        </View>
+        <Text style={[styles.statusLabel, { color: colors.text.secondary }]} numberOfLines={1}>守护状态</Text>
       </View>
 
-      {/* Main Control Button */}
+      <View style={styles.statusBody}>
+        <Text style={[styles.statusValue, { color: colors.text.primary, fontSize: responsiveValue({ default: 24, tablet: 28 }) }]} numberOfLines={1}>
+          {isConnected ? '守护中' : '已停止'}
+        </Text>
+        <View style={styles.statusLatency}>
+          <Text style={[styles.latencyNumber, { color: colors.info, fontSize: responsiveValue({ default: 20, tablet: 24 }) }]} numberOfLines={1}>
+            {isConnected && latestLatency > 0
+              ? (() => {
+                const latency = formatLatency(latestLatency);
+                return `${latency.value}${latency.unit}`;
+              })()
+              : '--'}
+          </Text>
+          <Text style={[styles.latencyLabel, { color: colors.text.tertiary }]} numberOfLines={1}>延迟</Text>
+        </View>
+      </View>
+    </View>
+  );
+
+  const ControlButton = () => {
+    // Cap button size for tablet to avoid looking too large
+    const rawButtonSize = responsiveValue({
+      default: scaleWidth(140),
+      tablet: scaleWidth(160),
+    });
+    const buttonSize = Math.min(rawButtonSize, 180);
+
+    return (
       <View style={styles.controlSection}>
-        <View style={styles.buttonWrapper}>
-          {/* Animated Glow Effect */}
+        <View style={[styles.buttonWrapper, { width: buttonSize * 1.4, height: buttonSize * 1.4 }]}>
+          {/* Breathing Ring */}
           {isConnected && (
             <Animated.View
               style={[
-                styles.glowRing,
+                styles.pulseRing,
                 {
-                  opacity: glowOpacity,
-                  transform: [{ scale: glowAnim.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [1, 1.15],
-                  })}],
+                  backgroundColor: colors.info,
+                  transform: [{ scale: pulseAnim }],
+                  opacity: pulseAnim.interpolate({
+                    inputRange: [1, 1.1],
+                    outputRange: [0.3, 0],
+                  }),
                 },
               ]}
-            >
-              <LinearGradient
-                colors={['#06b6d4', '#8b5cf6']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.glowGradient}
-              />
-            </Animated.View>
-          )}
-
-          {/* Rotating Border */}
-          {isConnected && (
-            <Animated.View
-              style={[
-                styles.rotatingBorder,
-                { transform: [{ rotate }] },
-              ]}
-            >
-              <LinearGradient
-                colors={['#06b6d4', '#8b5cf6', '#06b6d4']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.rotatingGradient}
-              />
-            </Animated.View>
+            />
           )}
 
           {/* Main Button */}
@@ -161,79 +125,182 @@ export const HomeView: React.FC = () => {
             <TouchableOpacity
               onPress={handlePress}
               activeOpacity={0.9}
+              style={[styles.mainButtonContainer, { shadowColor: colors.info }]}
             >
-              <View
-                style={styles.mainButtonShadow}
+              <LinearGradient
+                colors={isConnected ? [colors.info, colors.icon.active] : [colors.background.tertiary, colors.background.secondary]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={[styles.mainButton, {
+                  width: buttonSize,
+                  height: buttonSize,
+                  borderRadius: buttonSize / 2
+                }]}
               >
-                <LinearGradient
-                  colors={isConnected ? ['#0ea5e9', '#8b5cf6'] : ['#334155', '#1e293b']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.mainButton}
-                >
-                  <Icon
-                    name={isConnected ? 'shield' : 'shield-off'}
-                    size={responsiveValue({
-                      small: 48,
-                      medium: 56,
-                      large: 64,
-                      tablet: 72,
-                      default: 64,
-                    })}
-                    color={isConnected ? '#fff' : '#64748b'}
-                  />
-                </LinearGradient>
-              </View>
+                <Icon
+                  name={isConnected ? 'shield' : 'shield-off'}
+                  size={buttonSize * 0.45}
+                  color={isConnected ? colors.text.inverse : colors.text.disabled}
+                />
+              </LinearGradient>
             </TouchableOpacity>
           </Animated.View>
         </View>
 
-        <Text style={styles.buttonHint}>
+        <Text style={[styles.buttonHint, { color: colors.text.secondary }]}>
           {isConnected ? '点击关闭守护' : '点击开启守护'}
         </Text>
       </View>
+    );
+  };
 
-      {/* Stats Cards */}
-      <View style={styles.statsSection}>
-        <Text style={styles.sectionTitle}>今日统计</Text>
+  const DashboardStats = () => (
+    <View style={styles.dashboardGrid}>
+      {/* Blocked */}
+      <View style={[styles.dashboardCard, { backgroundColor: colors.background.elevated, borderColor: colors.border.default }]}>
+        <View style={[styles.dashboardIcon, { backgroundColor: colors.background.secondary }]}>
+          <Icon name="x-circle" size={24} color={colors.status.error} />
+        </View>
+        <View>
+          <Text style={[styles.dashboardValue, { color: colors.text.primary }]}>
+            {formatNumber(todayStatistics.blockedRequests)}
+          </Text>
+          <Text style={[styles.dashboardLabel, { color: colors.text.secondary }]}>已过滤</Text>
+        </View>
+      </View>
 
-        <View style={styles.statsGrid}>
-          {/* Blocked Requests */}
-          <View style={styles.statCard}>
-            <Icon name="x-circle" size={32} color="#ef4444" />
-            <Text style={styles.statNumber} numberOfLines={1}>
+      {/* Allowed */}
+      <View style={[styles.dashboardCard, { backgroundColor: colors.background.elevated, borderColor: colors.border.default }]}>
+        <View style={[styles.dashboardIcon, { backgroundColor: colors.background.secondary }]}>
+          <Icon name="check-circle" size={24} color={colors.status.active} />
+        </View>
+        <View>
+          <Text style={[styles.dashboardValue, { color: colors.text.primary }]}>
+            {formatNumber(todayStatistics.allowedRequests)}
+          </Text>
+          <Text style={[styles.dashboardLabel, { color: colors.text.secondary }]}>安全访问</Text>
+        </View>
+      </View>
+
+      {/* Total Requests */}
+      <View style={[styles.dashboardCard, { backgroundColor: colors.background.elevated, borderColor: colors.border.default }]}>
+        <View style={[styles.dashboardIcon, { backgroundColor: colors.background.secondary }]}>
+          <Icon name="activity" size={24} color={colors.info} />
+        </View>
+        <View>
+          <Text style={[styles.dashboardValue, { color: colors.text.primary }]}>
+            {formatNumber(todayStatistics.totalRequests)}
+          </Text>
+          <Text style={[styles.dashboardLabel, { color: colors.text.secondary }]}>总请求数</Text>
+        </View>
+      </View>
+
+      {/* Block Rate */}
+      <View style={[styles.dashboardCard, { backgroundColor: colors.background.elevated, borderColor: colors.border.default }]}>
+        <View style={[styles.dashboardIcon, { backgroundColor: colors.background.secondary }]}>
+          <Icon name="pie-chart" size={24} color={colors.status.warning} />
+        </View>
+        <View>
+          <Text style={[styles.dashboardValue, { color: colors.text.primary }]}>
+            {todayStatistics.blockRate.toFixed(1)}%
+          </Text>
+          <Text style={[styles.dashboardLabel, { color: colors.text.secondary }]}>拦截率</Text>
+        </View>
+      </View>
+    </View>
+  );
+
+  const TraditionalStats = () => (
+    <View style={styles.statsSection}>
+      <Text style={[styles.sectionTitle, { color: colors.text.tertiary }]}>今日统计</Text>
+      <View style={styles.statsGrid}>
+        <View style={[styles.statCard, { backgroundColor: colors.background.elevated, borderColor: colors.border.default }]}>
+          <View style={[styles.iconContainer, { backgroundColor: colors.background.secondary }]}>
+            <Icon name="x-circle" size={24} color={colors.status.error} />
+          </View>
+          <View>
+            <Text style={[styles.statNumber, { color: colors.text.primary }]} numberOfLines={1}>
               {formatNumber(todayStatistics.blockedRequests)}
             </Text>
-            <Text style={styles.statLabel} numberOfLines={1}>已过滤</Text>
-          </View>
-
-          {/* Allowed Requests */}
-          <View style={styles.statCard}>
-            <Icon name="check-circle" size={32} color="#10b981" />
-            <Text style={styles.statNumber} numberOfLines={1}>
-              {formatNumber(todayStatistics.allowedRequests)}
-            </Text>
-            <Text style={styles.statLabel} numberOfLines={1}>安全访问</Text>
+            <Text style={[styles.statLabel, { color: colors.text.secondary }]} numberOfLines={1}>已过滤</Text>
           </View>
         </View>
-
-        {/* Network Stats */}
-        <View style={styles.networkCard}>
-          <View style={styles.networkInfo}>
-            <Text style={styles.networkValue} numberOfLines={1}>
-              {formatNumber(todayStatistics.totalRequests)}
-            </Text>
-            <Text style={styles.networkLabel} numberOfLines={1}>总请求数</Text>
+        <View style={[styles.statCard, { backgroundColor: colors.background.elevated, borderColor: colors.border.default }]}>
+          <View style={[styles.iconContainer, { backgroundColor: colors.background.secondary }]}>
+            <Icon name="check-circle" size={24} color={colors.status.active} />
           </View>
-          <View style={styles.networkDivider} />
-          <View style={styles.networkInfo}>
-            <Text style={styles.networkValue} numberOfLines={1}>
-              {todayStatistics.blockRate.toFixed(1)}%
+          <View>
+            <Text style={[styles.statNumber, { color: colors.text.primary }]} numberOfLines={1}>
+              {formatNumber(todayStatistics.allowedRequests)}
             </Text>
-            <Text style={styles.networkLabel} numberOfLines={1}>拦截率</Text>
+            <Text style={[styles.statLabel, { color: colors.text.secondary }]} numberOfLines={1}>安全访问</Text>
           </View>
         </View>
       </View>
+
+      <View style={[styles.networkCard, { backgroundColor: colors.background.secondary, borderColor: colors.border.default }]}>
+        <View style={styles.networkInfo}>
+          <Text style={[styles.networkValue, { color: colors.text.primary }]} numberOfLines={1}>
+            {formatNumber(todayStatistics.totalRequests)}
+          </Text>
+          <Text style={[styles.networkLabel, { color: colors.text.secondary }]} numberOfLines={1}>总请求数</Text>
+        </View>
+        <View style={[styles.networkDivider, { backgroundColor: colors.border.default }]} />
+        <View style={styles.networkInfo}>
+          <Text style={[styles.networkValue, { color: colors.text.primary }]} numberOfLines={1}>
+            {todayStatistics.blockRate.toFixed(1)}%
+          </Text>
+          <Text style={[styles.networkLabel, { color: colors.text.secondary }]} numberOfLines={1}>拦截率</Text>
+        </View>
+      </View>
+    </View>
+  );
+
+  return (
+    <ScrollView
+      style={[styles.container, { backgroundColor: colors.background.primary }]}
+      contentContainerStyle={[
+        styles.content,
+        {
+          paddingTop: Math.max(insets.top, 20) + 16,
+          paddingBottom: Math.max(insets.bottom, 20) + 100,
+          paddingHorizontal: pagePadding
+        }
+      ]}
+      showsVerticalScrollIndicator={false}
+    >
+      {isSplitLayout ? (
+        // Landscape Dashboard
+        <View style={styles.splitLayout}>
+          <View style={styles.leftColumn}>
+            <StatusCard />
+            {/* Spacer between Status and Button */}
+            <View style={{ height: 32 }} />
+            <ControlButton />
+          </View>
+          <View style={styles.rightColumn}>
+            <Text style={[styles.sectionTitle, { color: colors.text.tertiary, marginBottom: 16 }]}>实时监控</Text>
+            <DashboardStats />
+          </View>
+        </View>
+      ) : isTabletPortrait ? (
+        // Tablet Portrait Dashboard
+        <View style={styles.tabletLayout}>
+          <StatusCard />
+          <View style={{ marginVertical: 40 }}>
+            <ControlButton />
+          </View>
+          <Text style={[styles.sectionTitle, { color: colors.text.tertiary, marginBottom: 16 }]}>实时监控</Text>
+          <DashboardStats />
+        </View>
+      ) : (
+        // Phone Layout (Traditional)
+        <>
+          <StatusCard />
+          <ControlButton />
+          <TraditionalStats />
+        </>
+      )}
     </ScrollView>
   );
 };
@@ -243,219 +310,184 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    paddingHorizontal: getPagePadding(),
-    // paddingTop 在 contentContainerStyle 中动态设置（包含安全区域）
+    flexGrow: 1,
+  },
+  splitLayout: {
+    flexDirection: 'row',
+    gap: 32,
+    flex: 1,
+    alignItems: 'center', // Center vertically
+  },
+  leftColumn: {
+    flex: 0.48,
+    justifyContent: 'center', // Center content vertically
+  },
+  rightColumn: {
+    flex: 0.52,
+    justifyContent: 'center',
+  },
+  tabletLayout: {
+    flex: 1,
+    justifyContent: 'center',
   },
   statusCard: {
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 24,
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  statusHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.5)',
-    borderRadius: responsive.borderRadius.xl,
-    padding: responsive.spacing.lg,
-    marginBottom: responsive.spacing['3xl'],
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
-    gap: responsive.spacing.md,
+    marginBottom: 8,
+    gap: 8,
   },
   statusDot: {
-    width: scaleWidth(12),
-    height: scaleWidth(12),
-    borderRadius: scaleWidth(6),
-    flexShrink: 0,
-  },
-  statusInfo: {
-    flex: 1,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
   statusLabel: {
-    fontSize: responsive.fontSize.sm,
-    color: '#94a3b8',
-    marginBottom: 4,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  statusBody: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
   },
   statusValue: {
-    fontSize: responsive.fontSize.xl,
     fontWeight: '700',
-    color: '#fff',
+    letterSpacing: -0.5,
   },
   statusLatency: {
     alignItems: 'flex-end',
-    flexShrink: 0,
   },
   latencyNumber: {
-    fontSize: responsive.fontSize['2xl'],
-    fontWeight: '700',
-    color: '#06b6d4',
+    fontWeight: '600',
   },
   latencyLabel: {
-    fontSize: responsive.fontSize.xs,
-    color: '#64748b',
-    marginTop: 4,
+    fontSize: 12,
+    marginTop: 2,
   },
   controlSection: {
-    marginBottom: responsive.spacing['3xl'],
-  },
-  sectionTitle: {
-    fontSize: responsive.fontSize.sm,
-    fontWeight: '600',
-    color: '#64748b',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: responsive.spacing.lg,
+    marginBottom: 24,
+    alignItems: 'center',
+    width: '100%',
   },
   buttonWrapper: {
     alignItems: 'center',
     justifyContent: 'center',
-    height: scaleHeight(220),
     position: 'relative',
+    marginBottom: 16,
   },
-  glowRing: {
+  pulseRing: {
     position: 'absolute',
-    width: responsiveValue({
-      small: scaleWidth(180),
-      medium: scaleWidth(190),
-      large: scaleWidth(200),
-      tablet: scaleWidth(220),
-      default: scaleWidth(200),
-    }),
-    height: responsiveValue({
-      small: scaleWidth(180),
-      medium: scaleWidth(190),
-      large: scaleWidth(200),
-      tablet: scaleWidth(220),
-      default: scaleWidth(200),
-    }),
-    borderRadius: responsiveValue({
-      small: scaleWidth(90),
-      medium: scaleWidth(95),
-      large: scaleWidth(100),
-      tablet: scaleWidth(110),
-      default: scaleWidth(100),
-    }),
-    overflow: 'hidden',
-  },
-  glowGradient: {
-    flex: 1,
-    opacity: 0.3,
-  },
-  rotatingBorder: {
-    position: 'absolute',
-    width: responsiveValue({
-      small: scaleWidth(160),
-      medium: scaleWidth(170),
-      large: scaleWidth(180),
-      tablet: scaleWidth(200),
-      default: scaleWidth(180),
-    }),
-    height: responsiveValue({
-      small: scaleWidth(160),
-      medium: scaleWidth(170),
-      large: scaleWidth(180),
-      tablet: scaleWidth(200),
-      default: scaleWidth(180),
-    }),
-    borderRadius: responsiveValue({
-      small: scaleWidth(80),
-      medium: scaleWidth(85),
-      large: scaleWidth(90),
-      tablet: scaleWidth(100),
-      default: scaleWidth(90),
-    }),
-    padding: 2,
-    overflow: 'hidden',
-  },
-  rotatingGradient: {
-    flex: 1,
-    borderRadius: responsiveValue({
-      small: scaleWidth(80),
-      medium: scaleWidth(85),
-      large: scaleWidth(90),
-      tablet: scaleWidth(100),
-      default: scaleWidth(90),
-    }),
-  },
-  mainButtonShadow: {
-    width: responsiveValue({
-      small: scaleWidth(140),
-      medium: scaleWidth(150),
-      large: scaleWidth(160),
-      tablet: scaleWidth(180),
-      default: scaleWidth(160),
-    }),
-    height: responsiveValue({
-      small: scaleWidth(140),
-      medium: scaleWidth(150),
-      large: scaleWidth(160),
-      tablet: scaleWidth(180),
-      default: scaleWidth(160),
-    }),
-    borderRadius: responsiveValue({
-      small: scaleWidth(70),
-      medium: scaleWidth(75),
-      large: scaleWidth(80),
-      tablet: scaleWidth(90),
-      default: scaleWidth(80),
-    }),
-    shadowColor: '#0ea5e9',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.4,
-    shadowRadius: 16,
-    elevation: 10,
-    backgroundColor: 'transparent',
-  },
-  mainButton: {
     width: '100%',
     height: '100%',
-    borderRadius: responsiveValue({
-      small: scaleWidth(70),
-      medium: scaleWidth(75),
-      large: scaleWidth(80),
-      tablet: scaleWidth(90),
-      default: scaleWidth(80),
-    }),
+    borderRadius: 9999,
+    zIndex: -1,
+  },
+  mainButtonContainer: {
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 24,
+    elevation: 10,
+  },
+  mainButton: {
     alignItems: 'center',
     justifyContent: 'center',
   },
   buttonHint: {
     textAlign: 'center',
-    color: '#94a3b8',
-    fontSize: responsive.fontSize.base,
-    marginTop: responsive.spacing.lg,
+    fontSize: 16,
+    fontWeight: '500',
   },
+  sectionTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  // Dashboard Specific Styles
+  dashboardGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 16,
+  },
+  dashboardCard: {
+    width: '47%', // Slightly less than 50% to account for gap
+    padding: 20,
+    borderRadius: 20,
+    borderWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+  },
+  dashboardIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dashboardValue: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  dashboardLabel: {
+    fontSize: 13,
+  },
+  // Traditional (Phone) Styles
   statsSection: {
-    marginBottom: responsive.spacing['3xl'],
+    marginBottom: 24,
+    width: '100%',
   },
   statsGrid: {
     flexDirection: 'row',
-    gap: responsive.spacing.md,
-    marginBottom: responsive.spacing.md,
+    gap: 12,
+    marginBottom: 12,
+    marginTop: 16,
   },
   statCard: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.4)',
-    borderRadius: responsive.borderRadius.lg,
-    padding: responsive.spacing.lg,
+    flexDirection: 'row',
     alignItems: 'center',
+    borderRadius: 16,
+    padding: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-    gap: responsive.spacing.sm,
+    gap: 12,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  iconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   statNumber: {
-    fontSize: responsive.fontSize['3xl'],
+    fontSize: 18,
     fontWeight: '700',
-    color: '#fff',
   },
   statLabel: {
-    fontSize: responsive.fontSize.sm,
-    color: '#94a3b8',
+    fontSize: 11,
+    marginTop: 2,
   },
   networkCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.4)',
-    borderRadius: responsive.borderRadius.lg,
-    padding: responsive.spacing.lg,
+    borderRadius: 16,
+    padding: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-    gap: responsive.spacing.md,
   },
   networkInfo: {
     flex: 1,
@@ -463,20 +495,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   networkValue: {
-    fontSize: responsive.fontSize.xl,
+    fontSize: 16,
     fontWeight: '700',
-    color: '#fff',
     marginBottom: 2,
-    textAlign: 'center',
   },
   networkLabel: {
-    fontSize: responsive.fontSize.xs,
-    color: '#94a3b8',
-    textAlign: 'center',
+    fontSize: 11,
   },
   networkDivider: {
     width: 1,
-    height: scaleHeight(40),
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    height: 32,
   },
 });

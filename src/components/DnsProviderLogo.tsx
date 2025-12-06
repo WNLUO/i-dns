@@ -2,6 +2,7 @@ import React from 'react';
 import { View, StyleSheet, Image } from 'react-native';
 import { SvgXml } from 'react-native-svg';
 import { scaleWidth } from '../utils/responsive';
+import { useThemeColors } from '../styles/theme';
 
 interface DnsProviderLogoProps {
   providerId: string;
@@ -67,6 +68,8 @@ const SVG_LOGOS: Record<string, string> = {
 };
 
 export const DnsProviderLogo: React.FC<DnsProviderLogoProps> = ({ providerId, size = 24 }) => {
+  const colors = useThemeColors();
+
   // 优先使用PNG图片
   const pngSource = PNG_LOGOS[providerId];
   const svgSource = SVG_LOGOS[providerId];
@@ -81,6 +84,7 @@ export const DnsProviderLogo: React.FC<DnsProviderLogoProps> = ({ providerId, si
             width: scaleWidth(size),
             height: scaleWidth(size),
             borderRadius: scaleWidth(size / 2),
+            backgroundColor: colors.text.tertiary, // dynamic
           },
         ]}
       />
@@ -137,6 +141,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   placeholder: {
-    backgroundColor: '#64748b',
+    // backgroundColor handled dynamically
   },
 });

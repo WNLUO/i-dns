@@ -4,10 +4,13 @@ import Icon from 'react-native-vector-icons/Feather';
 import { useApp } from '../contexts/AppContext';
 import { DnsLog } from '../types';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { responsive, getPagePadding, getCardPadding, formatLatency } from '../utils/responsive';
+import { responsive, formatLatency } from '../utils/responsive';
+import { useResponsiveLayout } from '../hooks/useResponsiveLayout';
+import { useThemeColors } from '../styles/theme';
 
 interface LogItemProps {
   log: DnsLog;
+  colors: any;
 }
 
 const formatTimestamp = (timestamp: string): string => {
@@ -19,25 +22,24 @@ const formatTimestamp = (timestamp: string): string => {
 };
 
 // Memoize LogItem to prevent unnecessary re-renders
-const LogItem: React.FC<LogItemProps> = React.memo(({ log }) => {
+const LogItem: React.FC<LogItemProps> = React.memo(({ log, colors }) => {
   const isBlocked = log.status === 'blocked';
 
   // Determine badge color and style based on content
   const getBadgeStyle = () => {
+    // For status badges in dark mode, we might want slightly darker backgrounds
+    // but preserving the 'color' essence.
+    // We can use opacity on the color for background.
     if (log.category === '已拦截') {
-      return { color: '#ef4444', bgColor: 'rgba(239, 68, 68, 0.15)' };
+      return { color: colors.status.error, bgColor: colors.status.error + '20' }; // 20 hex = ~12% opacity
     } else if (log.category === '无记录') {
-      // Domain exists but no A record - yellow
-      return { color: '#eab308', bgColor: 'rgba(234, 179, 8, 0.15)' };
+      return { color: colors.status.warning, bgColor: colors.status.warning + '20' };
     } else if (log.category === '域名不存在') {
-      // Domain does not exist (NXDOMAIN) - orange
-      return { color: '#f97316', bgColor: 'rgba(249, 115, 22, 0.15)' };
+      return { color: '#f97316', bgColor: '#f9731620' }; // Orange
     } else if (log.category === '解析失败') {
-      // DNS resolution failed - amber
-      return { color: '#f59e0b', bgColor: 'rgba(245, 158, 11, 0.15)' };
+      return { color: colors.status.warning, bgColor: colors.status.warning + '20' };
     } else {
-      // IP address - use cyan/teal color
-      return { color: '#06b6d4', bgColor: 'rgba(6, 182, 212, 0.15)' };
+      return { color: colors.info, bgColor: colors.info + '20' };
     }
   };
 
@@ -45,14 +47,14 @@ const LogItem: React.FC<LogItemProps> = React.memo(({ log }) => {
   const latency = formatLatency(log.latency);
 
   return (
-    <View style={styles.logItem}>
+    <View style={[styles.logItem, { backgroundColor: colors.background.elevated, borderColor: colors.border.default }]}>
       <Icon
         name={isBlocked ? 'shield' : 'check'}
         size={20}
-        color={isBlocked ? '#ef4444' : '#10b981'}
+        color={isBlocked ? colors.status.error : colors.status.active}
       />
       <View style={styles.logContent}>
-        <Text style={styles.logDomain} numberOfLines={1}>{log.domain}</Text>
+        <Text style={[styles.logDomain, { color: colors.text.primary }]} numberOfLines={1}>{log.domain}</Text>
         <View style={[styles.categoryBadge, { backgroundColor: badgeStyle.bgColor }]}>
           <Text style={[styles.categoryText, { color: badgeStyle.color }]}>
             {log.category}
@@ -60,20 +62,21 @@ const LogItem: React.FC<LogItemProps> = React.memo(({ log }) => {
         </View>
       </View>
       <View style={styles.rightColumn}>
-        <View style={styles.latencyBadge}>
-          <Icon name="activity" size={10} color="#06b6d4" />
-          <Text style={styles.latencyText}>{latency.value}{latency.unit}</Text>
+        <View style={[styles.latencyBadge, { backgroundColor: colors.info + '10' }]}>
+          <Icon name="activity" size={10} color={colors.info} />
+          <Text style={[styles.latencyText, { color: colors.info }]}>{latency.value}{latency.unit}</Text>
         </View>
-        <Text style={styles.logTime}>{formatTimestamp(log.timestamp)}</Text>
+        <Text style={[styles.logTime, { color: colors.text.tertiary }]}>{formatTimestamp(log.timestamp)}</Text>
       </View>
     </View>
   );
 });
 
 export const LogsView: React.FC = () => {
-  // Hook顺序很重要！useContext hooks必须在最前面
   const insets = useSafeAreaInsets();
   const { logs, searchLogs, filterLogs } = useApp();
+  const colors = useThemeColors();
+  const { pagePadding } = useResponsiveLayout();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [activeFilter, setActiveFilter] = useState<'all' | 'blocked' | 'allowed'>('all');
@@ -87,12 +90,10 @@ export const LogsView: React.FC = () => {
   const filteredLogs = useMemo(() => {
     let result = logs;
 
-    // 应用搜索过滤
     if (searchTerm.trim()) {
       result = searchLogs(searchTerm);
     }
 
-    // 应用状态过滤
     if (activeFilter !== 'all') {
       result = result.filter(log => log.status === activeFilter);
     }
@@ -107,46 +108,50 @@ export const LogsView: React.FC = () => {
   }, [logs]);
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
+    <View style={[styles.container, { backgroundColor: colors.background.primary }]}>
       <View style={[
         styles.header,
-        { paddingTop: Math.max(insets.top, 20) + responsive.spacing.lg }
+        {
+          paddingTop: Math.max(insets.top, 20) + responsive.spacing.lg,
+          paddingHorizontal: pagePadding,
+          backgroundColor: colors.background.primary,
+          borderBottomColor: colors.border.subtle
+        }
       ]}>
         <View style={styles.headerTop}>
-          <Text style={styles.title}>活动日志</Text>
-          <View style={styles.liveIndicator}>
-            <View style={styles.liveDot} />
-            <Text style={styles.liveText}>实时</Text>
+          <Text style={[styles.title, { color: colors.text.primary }]}>活动日志</Text>
+          <View style={[styles.liveIndicator, { backgroundColor: colors.status.error + '10' }]}>
+            <View style={[styles.liveDot, { backgroundColor: colors.status.error }]} />
+            <Text style={[styles.liveText, { color: colors.status.error }]}>实时</Text>
           </View>
         </View>
 
         {/* Stats Summary */}
-        <View style={styles.statsRow}>
+        <View style={[styles.statsRow, { backgroundColor: colors.background.elevated, borderColor: colors.border.default }]}>
           <View style={styles.statItem}>
-            <Text style={[styles.statValue, { color: '#ef4444' }]}>{stats.blocked}</Text>
-            <Text style={styles.statLabel}>过滤</Text>
+            <Text style={[styles.statValue, { color: colors.status.error }]}>{stats.blocked}</Text>
+            <Text style={[styles.statLabel, { color: colors.text.secondary }]}>过滤</Text>
           </View>
-          <View style={styles.statDivider} />
+          <View style={[styles.statDivider, { backgroundColor: colors.border.default }]} />
           <View style={styles.statItem}>
-            <Text style={[styles.statValue, { color: '#10b981' }]}>{stats.allowed}</Text>
-            <Text style={styles.statLabel}>安全</Text>
+            <Text style={[styles.statValue, { color: colors.status.active }]}>{stats.allowed}</Text>
+            <Text style={[styles.statLabel, { color: colors.text.secondary }]}>安全</Text>
           </View>
         </View>
 
         {/* Search Bar */}
         <View style={styles.searchContainer}>
-          <Icon name="search" size={18} color="#64748b" style={styles.searchIcon} />
+          <Icon name="search" size={18} color={colors.text.tertiary} style={styles.searchIcon} />
           <TextInput
-            style={styles.searchInput}
+            style={[styles.searchInput, { backgroundColor: colors.background.secondary, color: colors.text.primary }]}
             placeholder="搜索域名...(只支持最近1000条记录)"
-            placeholderTextColor="#64748b"
+            placeholderTextColor={colors.text.tertiary}
             value={searchTerm}
             onChangeText={setSearchTerm}
           />
           {searchTerm.length > 0 && (
             <TouchableOpacity onPress={() => setSearchTerm('')} style={styles.clearButton}>
-              <Icon name="x" size={16} color="#64748b" />
+              <Icon name="x" size={16} color={colors.text.tertiary} />
             </TouchableOpacity>
           )}
         </View>
@@ -162,19 +167,21 @@ export const LogsView: React.FC = () => {
               <View
                 style={[
                   styles.filterChip,
-                  { backgroundColor: activeFilter === filter.id ? 'rgba(6, 182, 212, 0.2)' : 'rgba(51, 65, 85, 0.5)' },
-                  activeFilter === filter.id && styles.filterChipActive,
+                  {
+                    backgroundColor: activeFilter === filter.id ? colors.background.tertiary : colors.background.secondary,
+                    borderColor: activeFilter === filter.id ? colors.border.focus : 'transparent'
+                  },
                 ]}
               >
                 <Icon
                   name={filter.icon}
                   size={14}
-                  color={activeFilter === filter.id ? '#06b6d4' : '#94a3b8'}
+                  color={activeFilter === filter.id ? colors.info : colors.text.tertiary}
                 />
                 <Text
                   style={[
                     styles.filterText,
-                    activeFilter === filter.id && styles.filterTextActive,
+                    { color: activeFilter === filter.id ? colors.info : colors.text.secondary }
                   ]}
                 >
                   {filter.label}
@@ -189,25 +196,24 @@ export const LogsView: React.FC = () => {
       <FlatList
         data={filteredLogs}
         keyExtractor={item => item.id}
-        renderItem={({ item }) => <LogItem log={item} />}
+        renderItem={({ item }) => <LogItem log={item} colors={colors} />}
         contentContainerStyle={[styles.listContent, { paddingBottom: Math.max(insets.bottom, 20) + 100 }]}
         showsVerticalScrollIndicator={false}
-        // Performance optimizations
         removeClippedSubviews={true}
         maxToRenderPerBatch={10}
         updateCellsBatchingPeriod={50}
         initialNumToRender={15}
         windowSize={21}
         getItemLayout={(data, index) => ({
-          length: 72, // Approximate height of LogItem
+          length: 72,
           offset: 72 * index,
           index,
         })}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Icon name="inbox" size={48} color="#334155" />
-            <Text style={styles.emptyText}>暂无日志记录</Text>
-            <Text style={styles.emptyHint}>开始使用家庭守护后，活动记录会显示在这里</Text>
+            <Icon name="inbox" size={48} color={colors.text.disabled} />
+            <Text style={[styles.emptyText, { color: colors.text.secondary }]}>暂无日志记录</Text>
+            <Text style={[styles.emptyHint, { color: colors.text.tertiary }]}>开始使用家庭守护后，活动记录会显示在这里</Text>
           </View>
         }
       />
@@ -220,9 +226,10 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    paddingHorizontal: getPagePadding(),
+    // paddingHorizontal set dynamically
     paddingBottom: responsive.spacing.lg,
     gap: responsive.spacing.lg,
+    borderBottomWidth: 1,
   },
   headerTop: {
     flexDirection: 'row',
@@ -230,15 +237,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   title: {
-    fontSize: responsive.fontSize['5xl'],
+    fontSize: responsive.fontSize['4xl'],
     fontWeight: '700',
-    color: '#fff',
   },
   liveIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 12,
@@ -247,21 +252,22 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#ef4444',
   },
   liveText: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#ef4444',
   },
   statsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.5)',
     borderRadius: 16,
     padding: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
+    shadowColor: '#64748b',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   statItem: {
     flex: 1,
@@ -270,17 +276,14 @@ const styles = StyleSheet.create({
   statDivider: {
     width: 1,
     height: 32,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
   },
   statValue: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#06b6d4',
     marginBottom: 2,
   },
   statLabel: {
     fontSize: 11,
-    color: '#94a3b8',
   },
   searchContainer: {
     position: 'relative',
@@ -292,15 +295,13 @@ const styles = StyleSheet.create({
     zIndex: 1,
   },
   searchInput: {
-    backgroundColor: 'rgba(15, 23, 42, 0.5)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: 'transparent',
     borderRadius: 16,
     paddingVertical: 12,
     paddingLeft: 44,
     paddingRight: 44,
     fontSize: 14,
-    color: '#fff',
   },
   clearButton: {
     position: 'absolute',
@@ -320,18 +321,13 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-  },
-  filterChipActive: {
-    borderColor: 'rgba(6, 182, 212, 0.3)',
   },
   filterText: {
     fontSize: 13,
     fontWeight: '600',
-    color: '#94a3b8',
   },
   filterTextActive: {
-    color: '#06b6d4',
+    // handled inline
   },
   listContent: {
     padding: 24,
@@ -341,11 +337,9 @@ const styles = StyleSheet.create({
   logItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.4)',
     borderRadius: 16,
     padding: 12,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
     gap: 12,
   },
   logContent: {
@@ -355,7 +349,6 @@ const styles = StyleSheet.create({
   logDomain: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#fff',
   },
   categoryBadge: {
     paddingHorizontal: 8,
@@ -373,14 +366,12 @@ const styles = StyleSheet.create({
   },
   logTime: {
     fontSize: 11,
-    color: '#64748b',
     fontVariant: ['tabular-nums'],
   },
   latencyBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: 'rgba(6, 182, 212, 0.1)',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
@@ -388,7 +379,6 @@ const styles = StyleSheet.create({
   latencyText: {
     fontSize: 11,
     fontWeight: '600',
-    color: '#06b6d4',
     fontVariant: ['tabular-nums'],
   },
   emptyContainer: {
@@ -400,11 +390,9 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#475569',
   },
   emptyHint: {
     fontSize: 13,
-    color: '#64748b',
     textAlign: 'center',
     maxWidth: 240,
     lineHeight: 20,

@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Icon from 'react-native-vector-icons/Feather';
 import { DnsProvider, DnsHealthCheck } from '../types';
 import { DnsProviderLogo } from './DnsProviderLogo';
+import { useThemeColors } from '../styles/theme';
 
 interface DNSProviderCardProps {
   provider: DnsProvider;
@@ -19,12 +20,14 @@ export const DNSProviderCard: React.FC<DNSProviderCardProps> = ({
   healthCheck,
   compact = false
 }) => {
+  const colors = useThemeColors();
+
   const getStatusColor = (status?: string) => {
     switch (status) {
-      case 'healthy': return '#10b981';
-      case 'slow': return '#f59e0b';
-      case 'timeout': return '#ef4444';
-      default: return '#64748b';
+      case 'healthy': return colors.status.active;
+      case 'slow': return colors.status.warning;
+      case 'timeout': return colors.status.error;
+      default: return colors.text.tertiary;
     }
   };
 
@@ -51,16 +54,17 @@ export const DNSProviderCard: React.FC<DNSProviderCardProps> = ({
         activeOpacity={0.7}
         style={[
           styles.compactCard,
-          isSelected && styles.compactCardSelected
+          { backgroundColor: colors.background.elevated, borderColor: colors.border.default },
+          isSelected && { backgroundColor: colors.background.tertiary, borderColor: colors.border.focus }
         ]}
       >
         <DnsProviderLogo providerId={provider.id} size={40} />
-        <Text style={styles.compactName} numberOfLines={1}>
+        <Text style={[styles.compactName, { color: colors.text.primary }]} numberOfLines={1}>
           {provider.name}
         </Text>
         {!isSelected && healthCheck && (
           <View style={styles.compactStatus}>
-            <Text style={styles.compactLatency}>
+            <Text style={[styles.compactLatency, { color: colors.text.secondary }]}>
               {getLatencyText(healthCheck.latency)}
             </Text>
             <Text style={styles.statusEmoji}>
@@ -69,8 +73,8 @@ export const DNSProviderCard: React.FC<DNSProviderCardProps> = ({
           </View>
         )}
         {isSelected && (
-          <View style={styles.compactCheckmark}>
-            <Icon name="check" size={14} color="#06b6d4" />
+          <View style={[styles.compactCheckmark, { backgroundColor: colors.info + '20' }]}>
+            <Icon name="check" size={14} color={colors.info} />
           </View>
         )}
       </TouchableOpacity>
@@ -84,14 +88,15 @@ export const DNSProviderCard: React.FC<DNSProviderCardProps> = ({
       activeOpacity={0.7}
       style={[
         styles.card,
-        isSelected && styles.cardSelected
+        { backgroundColor: colors.background.elevated, borderColor: colors.border.default },
+        isSelected && { backgroundColor: colors.background.tertiary, borderColor: colors.border.focus }
       ]}
     >
       <DnsProviderLogo providerId={provider.id} size={48} />
 
       <View style={styles.info}>
-        <Text style={styles.name}>{provider.name}</Text>
-        <Text style={styles.description} numberOfLines={1}>
+        <Text style={[styles.name, { color: colors.text.primary }]}>{provider.name}</Text>
+        <Text style={[styles.description, { color: colors.text.secondary }]} numberOfLines={1}>
           {provider.description}
         </Text>
 
@@ -109,8 +114,8 @@ export const DNSProviderCard: React.FC<DNSProviderCardProps> = ({
         {provider.features && provider.features.length > 0 && (
           <View style={styles.features}>
             {provider.features.slice(0, 3).map((feature, index) => (
-              <View key={index} style={styles.featureTag}>
-                <Text style={styles.featureText}>{feature}</Text>
+              <View key={index} style={[styles.featureTag, { backgroundColor: colors.background.secondary }]}>
+                <Text style={[styles.featureText, { color: colors.text.secondary }]}>{feature}</Text>
               </View>
             ))}
           </View>
@@ -118,7 +123,7 @@ export const DNSProviderCard: React.FC<DNSProviderCardProps> = ({
       </View>
 
       {isSelected && (
-        <Icon name="check-circle" size={22} color="#06b6d4" />
+        <Icon name="check-circle" size={22} color={colors.info} />
       )}
     </TouchableOpacity>
   );
@@ -132,13 +137,11 @@ const styles = StyleSheet.create({
     gap: 12,
     padding: 16,
     borderRadius: 16,
-    backgroundColor: 'rgba(15, 23, 42, 0.5)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
-  },
-  cardSelected: {
-    backgroundColor: 'rgba(6, 182, 212, 0.15)',
-    borderColor: 'rgba(6, 182, 212, 0.3)',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
   info: {
     flex: 1,
@@ -152,14 +155,12 @@ const styles = StyleSheet.create({
   name: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#fff',
   },
   regionBadge: {
     fontSize: 14,
   },
   description: {
     fontSize: 12,
-    color: '#94a3b8',
   },
   healthRow: {
     flexDirection: 'row',
@@ -184,11 +185,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
     borderRadius: 4,
-    backgroundColor: 'rgba(100, 116, 139, 0.3)',
   },
   featureText: {
     fontSize: 10,
-    color: '#94a3b8',
   },
 
   // 紧凑模式样式
@@ -197,20 +196,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     padding: 12,
     borderRadius: 12,
-    backgroundColor: 'rgba(15, 23, 42, 0.5)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.05)',
     minHeight: 110,
     position: 'relative',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
   compactCardSelected: {
-    backgroundColor: 'rgba(6, 182, 212, 0.15)',
-    borderColor: 'rgba(6, 182, 212, 0.3)',
+    // handled inline
   },
   compactName: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#fff',
     marginTop: 6,
     textAlign: 'center',
   },
@@ -222,7 +221,6 @@ const styles = StyleSheet.create({
   },
   compactLatency: {
     fontSize: 10,
-    color: '#94a3b8',
   },
   compactCheckmark: {
     position: 'absolute',
@@ -231,7 +229,6 @@ const styles = StyleSheet.create({
     width: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: 'rgba(6, 182, 212, 0.2)',
     alignItems: 'center',
     justifyContent: 'center',
   },

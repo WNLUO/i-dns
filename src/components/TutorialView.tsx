@@ -8,6 +8,8 @@ import {
 } from 'react-native';
 import Icon from 'react-native-vector-icons/Feather';
 import { scaleWidth, scaleFont, scaleSpacing } from '../utils/responsive';
+import { useThemeColors } from '../styles/theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface TutorialSection {
   id: string;
@@ -175,97 +177,132 @@ const TUTORIAL_DATA: TutorialSection[] = [
   },
 ];
 
-export const TutorialView: React.FC = () => {
+interface TutorialViewProps {
+  onClose?: () => void;
+}
+
+export const TutorialView: React.FC<TutorialViewProps> = ({ onClose }) => {
   const [expandedId, setExpandedId] = useState<string | null>('intro');
+  const colors = useThemeColors();
+  const insets = useSafeAreaInsets();
 
   const toggleSection = (id: string) => {
     setExpandedId(expandedId === id ? null : id);
   };
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      <View style={styles.header}>
-        <View style={styles.iconContainer}>
-          <Icon name="book" size={32} color="#3b82f6" />
-        </View>
-        <Text style={styles.title}>使用教程</Text>
-        <Text style={styles.subtitle}>
-          了解 iDNS 功能，开启家庭网络守护
-        </Text>
-      </View>
-
-      {TUTORIAL_DATA.map(section => (
-        <View key={section.id} style={styles.section}>
-          <TouchableOpacity
-            style={styles.sectionHeader}
-            onPress={() => toggleSection(section.id)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.sectionHeaderLeft}>
-              <View style={styles.sectionIcon}>
-                <Icon name={section.icon as any} size={20} color="#3b82f6" />
-              </View>
-              <Text style={styles.sectionTitle}>{section.title}</Text>
-            </View>
-            <Icon
-              name={expandedId === section.id ? 'chevron-up' : 'chevron-down'}
-              size={20}
-              color="#64748b"
-            />
+    <View style={[styles.container, { backgroundColor: colors.background.primary }]}>
+      {/* Header with Close Button */}
+      {onClose && (
+        <View style={[styles.topHeader, {
+          paddingTop: Math.max(insets.top, 20),
+          backgroundColor: colors.background.primary,
+          borderBottomColor: colors.border.subtle,
+          borderBottomWidth: 1,
+        }]}>
+          <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+            <Icon name="x" size={24} color={colors.text.primary} />
           </TouchableOpacity>
+        </View>
+      )}
 
-          {expandedId === section.id && (
-            <View style={styles.sectionContent}>
-              {section.content.map((item, index) => (
-                <View key={index} style={styles.item}>
-                  {item.step && (
-                    <View style={styles.stepBadge}>
-                      <Text style={styles.stepText}>{item.step}</Text>
-                    </View>
-                  )}
-                  <View style={styles.itemContent}>
-                    <Text style={styles.itemTitle}>{item.title}</Text>
-                    <Text style={styles.itemDescription}>
-                      {item.description}
-                    </Text>
-                    {item.note && (
-                      <View style={styles.noteContainer}>
-                        <Icon name="info" size={14} color="#06b6d4" />
-                        <Text style={styles.noteText}>{item.note}</Text>
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom, 20) + 20 }]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.header}>
+          <View style={[styles.iconContainer, { backgroundColor: colors.info + '10' }]}>
+            <Icon name="book" size={32} color={colors.info} />
+          </View>
+          <Text style={[styles.title, { color: colors.text.primary }]}>使用教程</Text>
+          <Text style={[styles.subtitle, { color: colors.text.secondary }]}>
+            了解 iDNS 功能，开启家庭网络守护
+          </Text>
+        </View>
+
+        {TUTORIAL_DATA.map(section => (
+          <View key={section.id} style={[styles.section, { backgroundColor: colors.background.elevated }]}>
+            <TouchableOpacity
+              style={styles.sectionHeader}
+              onPress={() => toggleSection(section.id)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.sectionHeaderLeft}>
+                <View style={[styles.sectionIcon, { backgroundColor: colors.info + '10' }]}>
+                  <Icon name={section.icon as any} size={20} color={colors.info} />
+                </View>
+                <Text style={[styles.sectionTitle, { color: colors.text.primary }]}>{section.title}</Text>
+              </View>
+              <Icon
+                name={expandedId === section.id ? 'chevron-up' : 'chevron-down'}
+                size={20}
+                color={colors.text.tertiary}
+              />
+            </TouchableOpacity>
+
+            {expandedId === section.id && (
+              <View style={styles.sectionContent}>
+                {section.content.map((item, index) => (
+                  <View key={index} style={styles.item}>
+                    {item.step && (
+                      <View style={[styles.stepBadge, { backgroundColor: colors.info }]}>
+                        <Text style={styles.stepText}>{item.step}</Text>
                       </View>
                     )}
+                    <View style={styles.itemContent}>
+                      <Text style={[styles.itemTitle, { color: colors.text.primary }]}>{item.title}</Text>
+                      <Text style={[styles.itemDescription, { color: colors.text.secondary }]}>
+                        {item.description}
+                      </Text>
+                      {item.note && (
+                        <View style={[styles.noteContainer, { backgroundColor: colors.info + '10', borderLeftColor: colors.info }]}>
+                          <Icon name="info" size={14} color={colors.info} />
+                          <Text style={[styles.noteText, { color: colors.info }]}>{item.note}</Text>
+                        </View>
+                      )}
+                    </View>
                   </View>
-                </View>
-              ))}
-            </View>
-          )}
-        </View>
-      ))}
+                ))}
+              </View>
+            )}
+          </View>
+        ))}
 
-      <View style={styles.footer}>
-        <Text style={styles.footerText}>
-          💡 如有疑问或建议，欢迎通过邮箱 admin@wnluo.com 联系我们
-        </Text>
-      </View>
-    </ScrollView>
+        <View style={[styles.footer, { backgroundColor: colors.info + '10', borderColor: colors.info + '40' }]}>
+          <Text style={[styles.footerText, { color: colors.info }]}>
+            💡 如有疑问或建议，欢迎通过邮箱 admin@wnluo.com 联系我们
+          </Text>
+        </View>
+      </ScrollView>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0f172a',
+  },
+  topHeader: {
+    paddingHorizontal: scaleSpacing(20),
+    paddingBottom: scaleSpacing(12),
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  closeButton: {
+    padding: 8,
+  },
+  content: {
+    paddingTop: scaleSpacing(16),
   },
   header: {
     alignItems: 'center',
     padding: scaleSpacing(24),
-    paddingTop: scaleSpacing(16),
+    paddingTop: scaleSpacing(0),
   },
   iconContainer: {
     width: scaleWidth(64),
     height: scaleWidth(64),
     borderRadius: scaleWidth(32),
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: scaleSpacing(16),
@@ -273,18 +310,15 @@ const styles = StyleSheet.create({
   title: {
     fontSize: scaleFont(24),
     fontWeight: '700',
-    color: '#f1f5f9',
     marginBottom: scaleSpacing(8),
   },
   subtitle: {
     fontSize: scaleFont(14),
-    color: '#94a3b8',
     textAlign: 'center',
   },
   section: {
     marginBottom: scaleSpacing(12),
     marginHorizontal: scaleSpacing(16),
-    backgroundColor: '#1e293b',
     borderRadius: scaleSpacing(16),
     overflow: 'hidden',
   },
@@ -303,7 +337,6 @@ const styles = StyleSheet.create({
     width: scaleWidth(36),
     height: scaleWidth(36),
     borderRadius: scaleSpacing(8),
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: scaleSpacing(12),
@@ -311,7 +344,6 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: scaleFont(16),
     fontWeight: '600',
-    color: '#f1f5f9',
     flex: 1,
   },
   sectionContent: {
@@ -326,7 +358,6 @@ const styles = StyleSheet.create({
     width: scaleWidth(28),
     height: scaleWidth(28),
     borderRadius: scaleWidth(14),
-    backgroundColor: '#3b82f6',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: scaleSpacing(12),
@@ -343,12 +374,10 @@ const styles = StyleSheet.create({
   itemTitle: {
     fontSize: scaleFont(15),
     fontWeight: '600',
-    color: '#f1f5f9',
     marginBottom: scaleSpacing(6),
   },
   itemDescription: {
     fontSize: scaleFont(14),
-    color: '#cbd5e1',
     lineHeight: scaleFont(20),
   },
   noteContainer: {
@@ -356,15 +385,12 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     marginTop: scaleSpacing(8),
     padding: scaleSpacing(10),
-    backgroundColor: 'rgba(6, 182, 212, 0.1)',
     borderRadius: scaleSpacing(8),
     borderLeftWidth: 3,
-    borderLeftColor: '#06b6d4',
   },
   noteText: {
     flex: 1,
     fontSize: scaleFont(13),
-    color: '#06b6d4',
     marginLeft: scaleSpacing(8),
     lineHeight: scaleFont(18),
   },
@@ -372,14 +398,11 @@ const styles = StyleSheet.create({
     margin: scaleSpacing(16),
     marginTop: scaleSpacing(8),
     padding: scaleSpacing(16),
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
     borderRadius: scaleSpacing(12),
     borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.3)',
   },
   footerText: {
     fontSize: scaleFont(13),
-    color: '#3b82f6',
     lineHeight: scaleFont(18),
     textAlign: 'center',
   },
