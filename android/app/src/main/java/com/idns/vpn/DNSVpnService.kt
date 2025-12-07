@@ -34,7 +34,8 @@ class DNSVpnService : VpnService() {
         private const val TAG = "DNSVpnService"
         private const val VPN_ADDRESS = "10.0.0.2"
         private const val VPN_ROUTE = "0.0.0.0"
-        private const val VPN_DNS = "94.140.14.14" // AdGuard DNS Family Protection
+        // 本地DNS处理模式 - 使用系统默认DNS服务器
+        private const val VPN_DNS = "8.8.8.8" // 默认使用Google DNS作为系统DNS
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "DNSVpnChannel"
 
@@ -51,12 +52,8 @@ class DNSVpnService : VpnService() {
     // P0-2: Use Trie filter instead of Set (100-1000x faster)
     private val trieFilter = DNSTrieFilter()
 
-    private var dnsServer = VPN_DNS
-    private var dnsServerType = "udp" // Only "udp" supported (DoH removed for simplicity)
-
-    // Fallback DNS servers for direct UDP queries (try in order like iOS)
-    // Using international DNS servers: Google, Cloudflare, OpenDNS
-    private val fallbackDNSServers = listOf("8.8.8.8", "1.1.1.1", "208.67.222.222")
+    // 本地DNS处理模式 - 使用系统DNS服务器列表
+    private val systemDNSServers = listOf("8.8.8.8", "1.1.1.1", "114.114.114.114")
 
     // UDP Connection Pool for DNS queries (initialized with 'this' to enable protect())
     private val udpConnectionPool = UDPConnectionPool(vpnService = this, poolSize = 3)
@@ -138,15 +135,8 @@ class DNSVpnService : VpnService() {
                 return START_STICKY
             }
             "UPDATE_DNS" -> {
-                intent.getStringExtra("dnsServer")?.let { newDnsServer ->
-                    dnsServer = newDnsServer
-                    dnsServerType = "udp"  // Only UDP supported
-
-                    VpnLogger.i(TAG, "========================================")
-                    VpnLogger.i(TAG, "DNS server updated to: $newDnsServer (UDP)")
-                    VpnLogger.i(TAG, "✅ DNS configuration hot-reloaded successfully")
-                    VpnLogger.i(TAG, "========================================")
-                }
+                // 本地DNS处理模式 - 忽略DNS服务器更新请求
+                VpnLogger.i(TAG, "DNS update request ignored (local DNS processing mode)")
                 return START_STICKY
             }
         }
@@ -202,9 +192,8 @@ class DNSVpnService : VpnService() {
 
     private fun startVPN() {
         VpnLogger.i(TAG, "========================================")
-        VpnLogger.i(TAG, "Starting VPN...")
-        VpnLogger.i(TAG, "DNS Server: $dnsServer")
-        VpnLogger.i(TAG, "DNS Type: $dnsServerType")
+        VpnLogger.i(TAG, "Starting VPN (Local DNS Processing Mode)...")
+        VpnLogger.i(TAG, "System DNS Servers: ${systemDNSServers.joinToString(", ")}")
         VpnLogger.i(TAG, "========================================")
 
         if (isRunning.get()) {
@@ -228,7 +217,7 @@ class DNSVpnService : VpnService() {
                 .setSession("iDNS Family Protection")
                 .addAddress(VPN_ADDRESS, 24)
                 .addRoute(VPN_ROUTE, 0)
-                .addDnsServer(dnsServer)
+                .addDnsServer(VPN_DNS)  // 使用系统默认DNS
                 .setBlocking(true)
                 .establish()
 
@@ -744,15 +733,13 @@ class DNSVpnService : VpnService() {
                 val dnsStart = udpHeaderStart + 8
                 val dnsQueryData = originalPacket.copyOfRange(dnsStart, originalLength)
 
-                // 3. Try DNS servers with fallback (like iOS DirectForwarder)
-                // Try primary server first, then fallback servers if it fails
-                val serversToTry = listOf(dnsServer) + fallbackDNSServers
+                // 3. 本地DNS处理模式 - 使用系统DNS服务器列表
                 var responseData: ByteArray? = null
                 var lastError: Exception? = null
 
-                for ((index, server) in serversToTry.withIndex()) {
+                for ((index, server) in systemDNSServers.withIndex()) {
                     try {
-                        VpnLogger.d(TAG, "Trying DNS server $server (attempt ${index + 1}/${serversToTry.size}) for ${dnsQuery.domain}")
+                        VpnLogger.d(TAG, "Trying DNS server $server (attempt ${index + 1}/${systemDNSServers.size}) for ${dnsQuery.domain}")
                         responseData = udpConnectionPool.query(server, dnsQueryData)
                         val latency = (System.currentTimeMillis() - startTime).toInt()
                         VpnLogger.i(TAG, "✅ DNS query succeeded using $server in ${latency}ms for ${dnsQuery.domain}")

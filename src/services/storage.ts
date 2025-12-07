@@ -18,14 +18,8 @@ const STORAGE_KEYS = {
   STATISTICS_COUNTERS: '@iDNS:statisticsCounters',
 } as const;
 
-// 默认设置
+// 默认设置 - 本地DNS处理模式
 const DEFAULT_SETTINGS: AppSettings = {
-  selectedDnsProvider: 'idns',
-  selectedProtocol: undefined, // 自动选择
-  autoFallback: true, // 默认启用自动故障转移
-  customFallbackList: [], // 空列表表示使用预设的fallback链
-  healthCheckInterval: 300, // 默认5分钟检查一次
-  smartSelection: false, // 默认不启用智能选择
   autoStart: false,
   childProtectionMode: false,
   notificationsEnabled: true,

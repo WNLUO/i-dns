@@ -997,6 +997,317 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         )
     }
 
+    // forwardDNSQueryDoH 函数已删除 (本地DNS处理模式不需要DoH)
+    // 以下是遗留代码开始标记 - 需要删除到 broadcastResponseToPendingRequests 之前
+    private func PLACEHOLDER_TO_DELETE() {
+        // 1. Check cache first (before any locking)
+        let dnsQuery = DNSQuery(domain: "", packet: Data(), queryType: 1)
+        let startTime = Date()
+        let originalPacket = Data()
+        let protocolNumber: UInt32 = 0
+        if let cachedResponse = getCachedDNSResponse(domain: dnsQuery.domain, queryType: dnsQuery.queryType) {
+            os_log("✓ DNS cache hit for: %{public}@", log: logger, type: .debug, dnsQuery.domain)
+
+            let latency = Int(Date().timeIntervalSince(startTime) * 1000)
+            let resolvedIP = parseResolvedIP(from: cachedResponse) ?? ""
+
+            // Check if cached response is blocked (shouldn't happen since we don't cache blocked responses, but safety check)
+            if resolvedIP == "0.0.0.0" {
+                os_log("🚫 Cached response is blocked (0.0.0.0), returning NXDOMAIN", log: logger, type: .info)
+                sendDNSEvent(domain: dnsQuery.domain, blocked: true, latency: latency, resolvedIP: "0.0.0.0", dnsResponse: cachedResponse, queryType: dnsQuery.queryType)
+                if let blockResponse = createBlockResponse(for: originalPacket) {
+                    packetFlow.writePackets([blockResponse], withProtocols: [NSNumber(value: protocolNumber)])
+                }
+                return
+            }
+
+            sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: resolvedIP, dnsResponse: cachedResponse, queryType: dnsQuery.queryType)
+
+            let ipHeaderLength = Int((originalPacket[0] & 0x0F)) * 4
+            if let responsePacket = createDNSResponsePacket(
+                originalPacket: originalPacket,
+                dnsResponse: cachedResponse,
+                ipHeaderLength: ipHeaderLength
+            ) {
+                os_log("✓ Sending cached response packet to app", log: logger, type: .info)
+                packetFlow.writePackets([responsePacket], withProtocols: [NSNumber(value: protocolNumber)])
+            } else {
+                os_log("❌ Failed to create response packet from cache", log: logger, type: .error)
+            }
+
+            return
+        }
+
+        // 2. REQUEST DEDUPLICATION: Check if same query is already in-flight
+        // Create unique key based on domain + query type (A, AAAA, HTTPS are different)
+        let requestKey = "\(dnsQuery.domain)_\(dnsQuery.queryType)"
+
+        inflightRequestsLock.lock()
+        let isInFlight = inflightRequests.contains(requestKey)
+
+        if isInFlight {
+            // Another request for this domain+type is already in-flight
+            // Register this request to receive the result when it arrives
+            os_log("🔄 Deduplicating query: %{public}@ (type %d) - waiting for in-flight request", log: logger, type: .debug, dnsQuery.domain, dnsQuery.queryType)
+
+            pendingResponseLock.lock()
+            if pendingResponseCallbacks[requestKey] == nil {
+                pendingResponseCallbacks[requestKey] = []
+            }
+            pendingResponseCallbacks[requestKey]?.append((originalPacket, protocolNumber))
+            pendingResponseLock.unlock()
+            inflightRequestsLock.unlock()
+            return
+        } else {
+            // Mark this request as in-flight
+            inflightRequests.insert(requestKey)
+            let currentInflightCount = inflightRequests.count
+            inflightRequestsLock.unlock()
+            os_log("✓ New in-flight request: %{public}@ (type %d) [Total in-flight: %d]", log: logger, type: .debug, dnsQuery.domain, dnsQuery.queryType, currentInflightCount)
+        }
+
+        // Extract DNS query data (skip IP and UDP headers)
+        let ipHeaderLength = Int((originalPacket[0] & 0x0F)) * 4
+        let udpHeaderStart = ipHeaderLength
+        let dnsStart = udpHeaderStart + 8
+
+        guard originalPacket.count > dnsStart else {
+            os_log("❌ Invalid packet size: %d", log: logger, type: .error, originalPacket.count)
+            return
+        }
+
+        let dnsQueryData = originalPacket.subdata(in: dnsStart..<originalPacket.count)
+        os_log("DNS query data size: %d bytes", log: logger, type: .info, dnsQueryData.count)
+
+        // Create HTTPS request for DoH
+        // We can use the domain name because we've excluded the resolved IP from VPN routing
+        guard let url = URL(string: dnsServer) else {
+            os_log("❌ Invalid DoH URL: %{public}@", log: logger, type: .error, dnsServer)
+            sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: 0, queryType: dnsQuery.queryType)
+            return
+        }
+
+        os_log("✓ DoH URL created: %{public}@", log: logger, type: .info, url.absoluteString)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/dns-message", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/dns-message", forHTTPHeaderField: "Accept")
+        request.setValue(String(dnsQueryData.count), forHTTPHeaderField: "Content-Length")
+
+        // CRITICAL FIX: Set Host header for CDN scenarios
+        // If we're using resolved IP address directly, SSL verification needs proper hostname
+        if !dohServerIPs.isEmpty, let hostname = URL(string: dnsServer)?.host {
+            request.setValue(hostname, forHTTPHeaderField: "Host")
+            os_log("✓ Set Host header for DoH: %{public}@", log: logger, type: .info, hostname)
+        }
+
+        request.httpBody = dnsQueryData
+        request.timeoutInterval = 5.0  // Reduced from 10s to 5s - fail fast
+
+        // Reduce logging verbosity - only log at debug level
+        os_log("📤 DoH request for %{public}@ (body: %d bytes)", log: logger, type: .debug, dnsQuery.domain, dnsQueryData.count)
+
+        let task = dohSession.dataTask(with: request) { [weak self] data, response, error in
+            guard let self = self else { return }
+
+            let latency = Int(Date().timeIntervalSince(startTime) * 1000)
+
+            if let error = error {
+                let nsError = error as NSError
+                os_log("❌ DoH request failed after %d ms", log: self.logger, type: .error, latency)
+                os_log("   Error: %{public}@", log: self.logger, type: .error, error.localizedDescription)
+                os_log("   Error code: %{public}@ (%d)", log: self.logger, type: .error, nsError.domain, nsError.code)
+
+                // Note: NSURLErrorDomain errors use negative codes
+                // -1001 = NSURLErrorTimedOut
+                // -1004 = NSURLErrorCannotConnectToHost
+                // etc.
+
+                // 详细的错误诊断
+                switch nsError.code {
+                case NSURLErrorTimedOut:
+                    os_log("   ⚠️ Timeout: DoH server took too long to respond", log: self.logger, type: .error)
+                case NSURLErrorCannotConnectToHost:
+                    os_log("   ⚠️ Cannot connect: Check if DoH server is reachable", log: self.logger, type: .error)
+                case NSURLErrorNetworkConnectionLost:
+                    os_log("   ⚠️ Network lost: Connection interrupted", log: self.logger, type: .error)
+                case NSURLErrorNotConnectedToInternet:
+                    os_log("   ⚠️ No internet: Device is offline", log: self.logger, type: .error)
+                case NSURLErrorSecureConnectionFailed:
+                    os_log("   ⚠️ SSL error: Certificate validation failed", log: self.logger, type: .error)
+                case NSURLErrorServerCertificateUntrusted:
+                    os_log("   ⚠️ Certificate untrusted: SSL certificate issue", log: self.logger, type: .error)
+                case NSURLErrorCannotFindHost:
+                    os_log("   ⚠️ DNS lookup failed: Cannot resolve DoH server hostname", log: self.logger, type: .error)
+                default:
+                    os_log("   ⚠️ Unknown error type", log: self.logger, type: .error)
+                }
+
+                self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, queryType: dnsQuery.queryType)
+
+                // Clean up in-flight tracking on error
+                self.cleanupInflightRequest(requestKey: requestKey)
+                return
+            }
+
+            os_log("📥 DoH response for %{public}@ (%d ms)", log: self.logger, type: .debug, dnsQuery.domain, latency)
+
+            // Check HTTP response
+            if let httpResponse = response as? HTTPURLResponse {
+                // Reduce logging - only log errors and first few successful responses
+                if httpResponse.statusCode != 200 {
+                    os_log("⚠️ HTTP Status: %d", log: self.logger, type: .error, httpResponse.statusCode)
+                }
+
+                // 验证Content-Type
+                if let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type") {
+                    if contentType.contains("application/dns-message") {
+                        // Content-Type is valid - no need to log every time
+                    } else {
+                        os_log("⚠️ Unexpected Content-Type: %{public}@", log: self.logger, type: .error, contentType)
+                        os_log("   Expected: application/dns-message", log: self.logger, type: .error)
+                    }
+                }
+
+                if httpResponse.statusCode != 200 {
+                    os_log("❌ DoH HTTP error: %d", log: self.logger, type: .error, httpResponse.statusCode)
+
+                    // 详细的HTTP错误码说明
+                    switch httpResponse.statusCode {
+                    case 400:
+                        os_log("   Bad Request: DNS query format invalid", log: self.logger, type: .error)
+                    case 404:
+                        os_log("   Not Found: DoH endpoint not available", log: self.logger, type: .error)
+                    case 413:
+                        os_log("   Payload Too Large: DNS query too big", log: self.logger, type: .error)
+                    case 415:
+                        os_log("   Unsupported Media Type: Wrong Content-Type", log: self.logger, type: .error)
+                    case 500, 502, 503:
+                        os_log("   Server Error: DoH server having issues", log: self.logger, type: .error)
+                    default:
+                        break
+                    }
+
+                    self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, queryType: dnsQuery.queryType)
+
+                    // Clean up in-flight tracking on HTTP error
+                    self.cleanupInflightRequest(requestKey: requestKey)
+                    return
+                }
+            } else {
+                os_log("⚠️ No HTTP response received", log: self.logger, type: .error)
+            }
+
+            guard let responseData = data, !responseData.isEmpty else {
+                os_log("❌ Empty DoH response", log: self.logger, type: .error)
+                self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: "", dnsResponse: nil, queryType: dnsQuery.queryType)
+
+                // Clean up in-flight tracking on empty response
+                self.cleanupInflightRequest(requestKey: requestKey)
+                return
+            }
+
+            os_log("✓ DoH response data size: %d bytes", log: self.logger, type: .info, responseData.count)
+
+            // Parse DNS response details for logging
+            let rcode = responseData.count > 3 ? Int(responseData[3]) & 0x0F : -1
+            let answerCount = responseData.count > 7 ? Int(responseData[6]) << 8 | Int(responseData[7]) : 0
+            let rcodeString: String
+            switch rcode {
+            case 0: rcodeString = "NOERROR"
+            case 3: rcodeString = "NXDOMAIN"
+            case 2: rcodeString = "SERVFAIL"
+            case 5: rcodeString = "REFUSED"
+            default: rcodeString = "Unknown(\(rcode))"
+            }
+
+            // Parse resolved IP from DNS response FIRST (before caching)
+            let resolvedIP = self.parseResolvedIP(from: responseData) ?? ""
+
+            os_log("📊 DNS Response Analysis:", log: self.logger, type: .info)
+            os_log("  RCODE: %{public}@ (%d)", log: self.logger, type: .info, rcodeString, rcode)
+            os_log("  Answer Count: %d", log: self.logger, type: .info, answerCount)
+            os_log("  Parsed IP: %{public}@", log: self.logger, type: .info, resolvedIP.isEmpty ? "(no A records)" : resolvedIP)
+
+            // CRITICAL FIX: Detect if DoH server blocked the domain (returns 0.0.0.0 or empty)
+            // When blocked, send NXDOMAIN instead of 0.0.0.0 to properly signal to apps
+            // Do NOT cache blocked responses to avoid poisoning cache
+            let isBlockedByDohServer = resolvedIP == "0.0.0.0"
+
+            if isBlockedByDohServer {
+                os_log("🚫 DoH server blocked domain: %{public}@ (returned 0.0.0.0)", log: self.logger, type: .info, dnsQuery.domain)
+
+                // Send blocked event with original DoH response
+                self.sendDNSEvent(domain: dnsQuery.domain, blocked: true, latency: latency, resolvedIP: "0.0.0.0", dnsResponse: responseData, queryType: dnsQuery.queryType)
+
+                // Return NXDOMAIN to properly signal blocking (DO NOT CACHE)
+                if let blockResponse = self.createBlockResponse(for: originalPacket) {
+                    os_log("✓ Sending NXDOMAIN response for blocked domain", log: self.logger, type: .info)
+                    self.packetFlow.writePackets([blockResponse], withProtocols: [NSNumber(value: protocolNumber)])
+                }
+
+                // Clean up in-flight tracking for blocked domain
+                self.cleanupInflightRequest(requestKey: requestKey)
+                return
+            }
+
+            // IMPROVED: Detect incomplete DNS responses and trigger CNAME recursive resolution
+            // If response is NOERROR with answers but resolvedIP indicates CNAME-only response
+            if rcode == 0 && answerCount > 0 && resolvedIP.hasPrefix("CNAME->") {
+                let cnameTarget = String(resolvedIP.dropFirst("CNAME->".count))
+                os_log("🔄 CNAME resolution: %{public}@ -> %{public}@",
+                       log: self.logger, type: .debug, dnsQuery.domain, cnameTarget)
+
+                // Trigger CNAME recursive resolution
+                // NOTE: Don't cleanup requestKey here! CNAME resolution will broadcast result
+                self.resolveCNAMERecursive(
+                    cnameTarget: cnameTarget,
+                    originalQuery: dnsQuery,
+                    originalPacket: originalPacket,
+                    protocolNumber: protocolNumber,
+                    cnameChain: [dnsQuery.domain.lowercased()],
+                    depth: 1,
+                    requestKey: requestKey  // Pass requestKey for cleanup and broadcasting
+                )
+                return
+            }
+
+            // Filter to single IP for better client compatibility
+            let finalResponseData = self.filterToSingleIP(dnsResponse: responseData)
+
+            // PERFORMANCE FIX: Cache ALL responses including "no records" (NOERROR with 0 answers)
+            // extractTTLFromDNSResponse now returns 60s TTL for "no records" to prevent query storms
+            self.cacheDNSResponse(domain: dnsQuery.domain, response: finalResponseData, queryType: dnsQuery.queryType)
+
+            // Send event to main app with actual latency and resolved IP
+            self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: resolvedIP, dnsResponse: finalResponseData, queryType: dnsQuery.queryType)
+            os_log("✅ DoH query completed successfully in %d ms, resolved to: %{public}@", log: self.logger, type: .info, latency, resolvedIP)
+            os_log("=== DoH Query End ===", log: self.logger, type: .info)
+
+            // Create response packet (reconstruct IP + UDP + DNS)
+            if let responsePacket = self.createDNSResponsePacket(
+                originalPacket: originalPacket,
+                dnsResponse: finalResponseData,
+                ipHeaderLength: ipHeaderLength
+            ) {
+                os_log("✓ Response packet created, sending back to app", log: self.logger, type: .info)
+                self.packetFlow.writePackets([responsePacket], withProtocols: [NSNumber(value: protocolNumber)])
+            } else {
+                os_log("❌ Failed to create response packet", log: self.logger, type: .error)
+            }
+
+            // RESPONSE BROADCAST: Send response to all pending requests waiting for this query
+            self.broadcastResponseToPendingRequests(
+                requestKey: requestKey,
+                dnsResponse: finalResponseData,
+                queryType: dnsQuery.queryType
+            )
+        }
+
+        task.resume()
+        os_log("DoH task started", log: logger, type: .info)
+    }
 
     /// Broadcast DNS response to all pending requests waiting for the same query
     private func broadcastResponseToPendingRequests(requestKey: String, dnsResponse: Data, queryType: UInt16) {
@@ -1793,6 +2104,356 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    private func resolveDohServerIP(completion: @escaping () -> Void) {
+        // Use direct UDP query to reliable DNS servers (bypassing system DNS)
+        // This avoids circular dependency where system DNS is intercepted by VPN
+        os_log("🔍 Resolving DoH server using direct UDP queries to reliable DNS", log: self.logger, type: .info)
+
+        tryResolveWithDNS(hostname: dohServerHostname,
+                          dnsServers: reliableDNSServers,
+                          currentIndex: 0,
+                          completion: completion)
+    }
+
+    private func tryResolveWithDNS(hostname: String,
+                                    dnsServers: [String],
+                                    currentIndex: Int,
+                                    completion: @escaping () -> Void) {
+        guard currentIndex < dnsServers.count else {
+            os_log("❌ All DNS servers failed to resolve %{public}@", log: logger, type: .error, hostname)
+            // Fallback to UDP DNS mode
+            fallbackToUDP()
+            completion()
+            return
+        }
+
+        let dnsServer = dnsServers[currentIndex]
+        os_log("🔍 Querying %{public}@ via DNS server %{public}@", log: logger, type: .info, hostname, dnsServer)
+
+        // Create UDP connection to DNS server
+        let connection = NWConnection(
+            host: NWEndpoint.Host(dnsServer),
+            port: 53,
+            using: .udp
+        )
+
+        // Set timeout
+        let timeoutWorkItem = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            os_log("⏱ DNS query timeout for %{public}@", log: self.logger, type: .error, dnsServer)
+            connection.cancel()
+            // Try next DNS server
+            self.tryResolveWithDNS(hostname: hostname,
+                                   dnsServers: dnsServers,
+                                   currentIndex: currentIndex + 1,
+                                   completion: completion)
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 5.0, execute: timeoutWorkItem)
+
+        connection.stateUpdateHandler = { [weak self] state in
+            guard let self = self else { return }
+
+            switch state {
+            case .ready:
+                // Build DNS query packet
+                let queryData = self.buildDNSQuery(hostname: hostname)
+
+                connection.send(content: queryData, completion: .contentProcessed { error in
+                    if let error = error {
+                        os_log("Failed to send DNS query: %{public}@", log: self.logger, type: .error, error.localizedDescription)
+                        timeoutWorkItem.cancel()
+                        connection.cancel()
+                        // Try next DNS server
+                        self.tryResolveWithDNS(hostname: hostname,
+                                               dnsServers: dnsServers,
+                                               currentIndex: currentIndex + 1,
+                                               completion: completion)
+                        return
+                    }
+
+                    // Receive DNS response
+                    // Using 1472 bytes (1500 MTU - 28 IP/UDP headers) to support EDNS responses
+                    connection.receive(minimumIncompleteLength: 1, maximumLength: 1472) { content, _, _, error in
+                        timeoutWorkItem.cancel()
+                        connection.cancel()
+
+                        if let error = error {
+                            os_log("Failed to receive DNS response: %{public}@", log: self.logger, type: .error, error.localizedDescription)
+                            // Try next DNS server
+                            self.tryResolveWithDNS(hostname: hostname,
+                                                   dnsServers: dnsServers,
+                                                   currentIndex: currentIndex + 1,
+                                                   completion: completion)
+                            return
+                        }
+
+                        guard let responseData = content else {
+                            os_log("Empty DNS response from %{public}@", log: self.logger, type: .error, dnsServer)
+                            // Try next DNS server
+                            self.tryResolveWithDNS(hostname: hostname,
+                                                   dnsServers: dnsServers,
+                                                   currentIndex: currentIndex + 1,
+                                                   completion: completion)
+                            return
+                        }
+
+                        // Parse DNS response to get all A records
+                        if let ips = self.parseAllARecords(from: responseData), !ips.isEmpty {
+                            self.dohServerIPs = ips
+                            os_log("✅ Resolved %d IP(s) from %{public}@: %{public}@",
+                                   log: self.logger, type: .info,
+                                   ips.count, dnsServer, ips.joined(separator: ", "))
+                            completion()
+                        } else {
+                            os_log("Failed to parse DNS response from %{public}@", log: self.logger, type: .error, dnsServer)
+                            // Try next DNS server
+                            self.tryResolveWithDNS(hostname: hostname,
+                                                   dnsServers: dnsServers,
+                                                   currentIndex: currentIndex + 1,
+                                                   completion: completion)
+                        }
+                    }
+                })
+
+            case .failed(let error):
+                os_log("DNS connection failed: %{public}@", log: self.logger, type: .error, error.localizedDescription)
+                timeoutWorkItem.cancel()
+                connection.cancel()
+                // Try next DNS server
+                self.tryResolveWithDNS(hostname: hostname,
+                                       dnsServers: dnsServers,
+                                       currentIndex: currentIndex + 1,
+                                       completion: completion)
+
+            default:
+                break
+            }
+        }
+
+        connection.start(queue: .global())
+    }
+
+    private func buildDNSQuery(hostname: String) -> Data {
+        var data = Data()
+
+        // DNS Header (12 bytes)
+        data.append(contentsOf: [0x00, 0x01])  // Transaction ID
+        data.append(contentsOf: [0x01, 0x00])  // Flags: Standard query, recursion desired
+        data.append(contentsOf: [0x00, 0x01])  // Questions: 1
+        data.append(contentsOf: [0x00, 0x00])  // Answer RRs: 0
+        data.append(contentsOf: [0x00, 0x00])  // Authority RRs: 0
+        data.append(contentsOf: [0x00, 0x00])  // Additional RRs: 0
+
+        // Query: QNAME (domain name)
+        let labels = hostname.split(separator: ".")
+        for label in labels {
+            data.append(UInt8(label.count))
+            data.append(contentsOf: label.utf8)
+        }
+        data.append(0x00)  // Null terminator
+
+        // QTYPE: A (IPv4 address)
+        data.append(contentsOf: [0x00, 0x01])
+        // QCLASS: IN (Internet)
+        data.append(contentsOf: [0x00, 0x01])
+
+        return data
+    }
+
+    private func parseAllARecords(from dnsResponse: Data) -> [String]? {
+        guard dnsResponse.count > 12 else { return nil }
+
+        // Get answer count from header (bytes 6-7)
+        let answerCount = Int(dnsResponse[6]) << 8 | Int(dnsResponse[7])
+        guard answerCount > 0 else { return nil }
+
+        var ips: [String] = []
+
+        // Skip header (12 bytes)
+        var index = 12
+
+        // Skip question section
+        while index < dnsResponse.count {
+            let length = Int(dnsResponse[index])
+            if length == 0 {
+                index += 1
+                break
+            }
+            index += 1 + length
+        }
+        index += 4  // Skip QTYPE and QCLASS
+
+        // Parse answer section - collect ALL A records
+        for _ in 0..<answerCount {
+            guard index + 12 <= dnsResponse.count else { break }
+
+            // Handle name (might be compressed with pointer)
+            if dnsResponse[index] & 0xC0 == 0xC0 {
+                // Compressed name (pointer)
+                index += 2
+            } else {
+                // Regular name
+                while index < dnsResponse.count {
+                    let length = Int(dnsResponse[index])
+                    if length == 0 {
+                        index += 1
+                        break
+                    }
+                    index += 1 + length
+                }
+            }
+
+            guard index + 10 <= dnsResponse.count else { break }
+
+            // Read TYPE (2 bytes)
+            let recordType = Int(dnsResponse[index]) << 8 | Int(dnsResponse[index + 1])
+            index += 2
+
+            // Skip CLASS (2 bytes)
+            index += 2
+
+            // Skip TTL (4 bytes)
+            index += 4
+
+            // Read RDLENGTH (2 bytes)
+            let rdLength = Int(dnsResponse[index]) << 8 | Int(dnsResponse[index + 1])
+            index += 2
+
+            // Check if this is an A record (TYPE = 1) with 4 bytes of data
+            if recordType == 1 && rdLength == 4 && index + 4 <= dnsResponse.count {
+                // Extract IPv4 address
+                let ip = "\(dnsResponse[index]).\(dnsResponse[index + 1]).\(dnsResponse[index + 2]).\(dnsResponse[index + 3])"
+                ips.append(ip)
+            }
+
+            // Skip RDATA
+            index += rdLength
+        }
+
+        return ips.isEmpty ? nil : ips
+    }
+
+    /// Filter DNS response to keep only the first A/AAAA record
+    /// This improves client compatibility by returning simple responses
+    private func filterToSingleIP(dnsResponse: Data) -> Data {
+        guard dnsResponse.count > 12 else { return dnsResponse }
+
+        // Get answer count from header
+        let answerCount = Int(dnsResponse[6]) << 8 | Int(dnsResponse[7])
+        guard answerCount > 1 else { return dnsResponse }  // Only 1 answer, no need to filter
+
+        var result = Data()
+        var index = 12
+
+        // Copy header
+        result.append(dnsResponse.subdata(in: 0..<12))
+
+        // Skip question section to find where it ends
+        var questionEndIndex = 12
+        while questionEndIndex < dnsResponse.count {
+            let length = Int(dnsResponse[questionEndIndex])
+            if length == 0 {
+                questionEndIndex += 1
+                break
+            }
+            questionEndIndex += 1 + length
+        }
+        questionEndIndex += 4  // Skip QTYPE and QCLASS
+
+        // Copy question section
+        result.append(dnsResponse.subdata(in: 12..<questionEndIndex))
+        index = questionEndIndex
+
+        var foundFirstIP = false
+        var newAnswerCount = 0
+        var answersData = Data()
+
+        // Parse answer section
+        for _ in 0..<answerCount {
+            guard index + 12 <= dnsResponse.count else { break }
+
+            let answerStartIndex = index
+
+            // Handle name (might be compressed with pointer)
+            if dnsResponse[index] & 0xC0 == 0xC0 {
+                index += 2
+            } else {
+                while index < dnsResponse.count {
+                    let length = Int(dnsResponse[index])
+                    if length == 0 {
+                        index += 1
+                        break
+                    }
+                    index += 1 + length
+                }
+            }
+
+            guard index + 10 <= dnsResponse.count else { break }
+
+            // Read TYPE
+            let recordType = Int(dnsResponse[index]) << 8 | Int(dnsResponse[index + 1])
+            index += 2
+
+            // Skip CLASS (2 bytes)
+            index += 2
+
+            // Skip TTL (4 bytes)
+            index += 4
+
+            // Read RDLENGTH
+            let rdLength = Int(dnsResponse[index]) << 8 | Int(dnsResponse[index + 1])
+            index += 2
+
+            let answerEndIndex = index + rdLength
+
+            // Check if this is an A (1) or AAAA (28) record
+            let isIPRecord = (recordType == 1 || recordType == 28)
+
+            // Keep this record if:
+            // 1. It's the first IP record we found, OR
+            // 2. It's not an IP record (keep CNAME, etc.)
+            if (isIPRecord && !foundFirstIP) || !isIPRecord {
+                if isIPRecord {
+                    foundFirstIP = true
+                }
+                // Copy this entire answer record
+                answersData.append(dnsResponse.subdata(in: answerStartIndex..<answerEndIndex))
+                newAnswerCount += 1
+            }
+
+            index = answerEndIndex
+        }
+
+        // Update answer count in header
+        result[6] = UInt8(newAnswerCount >> 8)
+        result[7] = UInt8(newAnswerCount & 0xFF)
+
+        // Append filtered answers
+        result.append(answersData)
+
+        // Copy remaining sections (authority, additional) if any
+        if index < dnsResponse.count {
+            result.append(dnsResponse.subdata(in: index..<dnsResponse.count))
+        }
+
+        if answerCount != newAnswerCount {
+            os_log("🔧 Filtered DNS response: %d answers -> %d answers (kept first IP only)",
+                   log: logger, type: .debug, answerCount, newAnswerCount)
+        }
+
+        return result
+    }
+
+    private func fallbackToUDP() {
+        // Helper method to fallback to UDP DNS
+        // Using China mainland DNS for better performance and stability
+        if self.dnsServerType == "doh" {
+            os_log("🔄 Falling back to UDP DNS (Tencent DNSPod)", log: self.logger, type: .info)
+            self.dnsServer = "119.29.29.29"  // 腾讯云DNSPod公共DNS
+            self.dnsServerType = "udp"
+            os_log("✓ DNS server changed to UDP fallback: 119.29.29.29", log: self.logger, type: .info)
+        }
+    }
 
     // DISABLED: Deduplication was causing queries to be dropped without responses
     // TODO: Implement response caching to properly handle duplicate queries
@@ -1918,9 +2579,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         params.expiredDNSBehavior = .allow  // Allow expired DNS for bootstrap
         params.multipathServiceType = .handover  // Use best available network
 
-        // 本地DNS处理模式 - 使用第一个系统DNS服务器
-        let dnsServerAddress = systemDNSServers.first ?? "8.8.8.8"
-        let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(dnsServerAddress), port: 53)
+        let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(dnsServer), port: 53)
         let connection = NWConnection(to: endpoint, using: params)
 
         // Track connection creation time for health monitoring
@@ -1961,11 +2620,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         }
 
-        connection.start(queue: DispatchQueue.global())
+        connection.start(queue: .global())
         sharedUDPConnection = connection
 
         os_log("🆕 Created UDP connection (v%d) to %{public}@:53", log: logger, type: .info,
-               currentVersion, dnsServerAddress)
+               currentVersion, dnsServer)
         return (connection, currentVersion)
     }
 

@@ -1,12 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import Icon from 'react-native-vector-icons/Feather';
 import { LOG_RETENTION_OPTIONS } from '../constants';
 import { useApp } from '../contexts/AppContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { responsive } from '../utils/responsive';
-import { DNSProviderSelector } from './DNSProviderSelector';
-import { DNSAdvancedSettings } from './DNSAdvancedSettings';
 import { useThemeColors } from '../styles/theme';
 import { useResponsiveLayout } from '../hooks/useResponsiveLayout';
 
@@ -16,20 +14,9 @@ interface SettingsViewProps {
 
 export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigate }) => {
   const insets = useSafeAreaInsets();
-  const { settings, updateSettings, logs, clearLogs } = useApp();
-  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+  const { settings, updateSettings, clearLogs } = useApp();
   const colors = useThemeColors();
   const { pagePadding } = useResponsiveLayout();
-
-  if (showAdvancedSettings) {
-    return (
-      <DNSAdvancedSettings
-        settings={settings}
-        onUpdateSettings={updateSettings}
-        onBack={() => setShowAdvancedSettings(false)}
-      />
-    );
-  }
 
   return (
     <ScrollView
@@ -50,12 +37,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onNavigate }) => {
         <Text style={[styles.subtitle, { color: colors.text.secondary }]}>个性化您的家庭网络守护体验</Text>
       </View>
 
-      {/* DNS Provider Selector */}
-      <DNSProviderSelector
-        selectedProviderId={settings.selectedDnsProvider}
-        onSelectProvider={(providerId) => updateSettings({ selectedDnsProvider: providerId })}
-        onAdvancedSettings={() => setShowAdvancedSettings(true)}
-      />
+      {/* 本地DNS处理模式说明 */}
+      <View style={styles.section}>
+        <View style={styles.sectionHeader}>
+          <Icon name="shield" size={18} color={colors.info} />
+          <Text style={[styles.sectionTitle, { color: colors.text.primary }]}>DNS 保护</Text>
+        </View>
+        <View style={[styles.settingsCard, { backgroundColor: colors.background.elevated, borderColor: colors.border.default }]}>
+          <Text style={[styles.dataLabel, { color: colors.text.primary }]}>本地DNS处理模式</Text>
+          <Text style={[styles.retentionDesc, { color: colors.text.secondary }]}>
+            所有DNS查询都在本地进行过滤处理，通过黑白名单保护您的家庭网络安全。
+          </Text>
+        </View>
+      </View>
 
       {/* Data Settings */}
       <View style={styles.section}>

@@ -5,14 +5,12 @@ import {
   DomainRule,
   Statistics,
   LogRetentionPeriod,
-  DnsServerConfig,
 } from '../types';
 import {AppState, AppStateStatus} from 'react-native';
 import * as storage from '../services/storage';
 import {calculateStatistics, getTodayStatistics, getStatisticsFromCounters, getTodayStatisticsFromCounters} from '../services/statistics';
 import vpnService, { DNSRequestEvent } from '../services/vpnService';
 import filterRulesService from '../services/filterRules';
-import dnsHealthCheck from '../services/dnsHealthCheck';
 
 interface AppContextType {
   // 设置相关
@@ -57,13 +55,8 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
+  // 简化的设置 - 本地DNS处理模式
   const [settings, setSettings] = useState<AppSettings>({
-    selectedDnsProvider: 'idns',
-    selectedProtocol: undefined,
-    autoFallback: true,
-    customFallbackList: [],
-    healthCheckInterval: 300,
-    smartSelection: false,
     autoStart: false,
     childProtectionMode: false,
     notificationsEnabled: true,
@@ -117,18 +110,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
     loadInitialData();
   }, []);
 
-  // 启动DNS健康检查
-  useEffect(() => {
-    if (settings.healthCheckInterval > 0) {
-      console.log(`🏥 Starting DNS health check (interval: ${settings.healthCheckInterval}s)`);
-      dnsHealthCheck.startPeriodicCheck(settings.healthCheckInterval);
-    }
-
-    return () => {
-      console.log('🏥 Stopping DNS health check');
-      dnsHealthCheck.stopPeriodicCheck();
-    };
-  }, [settings.healthCheckInterval]);
+  // 本地DNS处理模式 - 不需要健康检查
 
   // 当日志变化时重新计算统计数据（使用计数器）
   useEffect(() => {
@@ -302,21 +284,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
         try {
           await storage.saveConnectionState(true);
           setIsConnectedState(true);
-
-          // 设置初始DNS配置
-          console.log('⚙️ Setting Initial DNS Configuration');
-          const {DNS_SERVER_MAP} = await import('../constants');
-          const dnsConfig = DNS_SERVER_MAP[settings.selectedDnsProvider];
-
-          if (dnsConfig) {
-            // 仅使用UDP (DoH和DoT已移除)
-            const serverUrl = dnsConfig.udp;
-
-            if (serverUrl) {
-              await vpnService.updateDNSServer(serverUrl);
-              console.log('✅ DNS configured:', serverUrl);
-            }
-          }
+          console.log('✅ VPN setup completed (local DNS processing mode)');
         } catch (error) {
           console.error('❌ Failed to complete VPN setup:', error);
         }
@@ -481,53 +449,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
     try {
       const newSettings = await storage.updateSettings(updates);
       setSettings(newSettings);
-
-      // 如果更新了DNS服务商或协议设置，且VPN已连接，则通知VPN扩展切换DNS服务器
-      if ((updates.selectedDnsProvider || updates.selectedProtocol) && isConnected && vpnService.isAvailable()) {
-        const providerId = updates.selectedDnsProvider || newSettings.selectedDnsProvider;
-        console.log('========================================');
-        console.log('🔄 DNS Configuration Changed');
-        console.log(`Provider ID: ${providerId}`);
-
-        const {DNS_SERVER_MAP} = await import('../constants');
-        const dnsConfig = DNS_SERVER_MAP[providerId];
-
-        if (dnsConfig) {
-          // 根据选择的协议或自动选择
-          const protocol = updates.selectedProtocol || newSettings.selectedProtocol;
-          let serverUrl: string | undefined;
-
-          // 仅使用UDP (DoH和DoT已移除)
-          serverUrl = dnsConfig.udp;
-
-          console.log(`Protocol: ${protocol || 'auto'}`);
-          console.log(`DNS Server: ${serverUrl}`);
-
-          if (serverUrl) {
-            try {
-              console.log('📤 Sending DNS update to VPN extension...');
-              await vpnService.updateDNSServer(serverUrl);
-              console.log('✅ DNS server updated successfully');
-              console.log('========================================');
-            } catch (error) {
-              console.error('❌ Failed to update DNS server in VPN:', error);
-              console.log('========================================');
-            }
-          }
-        } else {
-          console.error(`❌ No DNS configuration found for provider: ${providerId}`);
-          console.log('========================================');
-        }
-      }
-
-      // 如果更新了健康检查间隔，重启健康检查
-      if (updates.healthCheckInterval !== undefined) {
-        if (updates.healthCheckInterval > 0) {
-          dnsHealthCheck.startPeriodicCheck(updates.healthCheckInterval);
-        } else {
-          dnsHealthCheck.stopPeriodicCheck();
-        }
-      }
+      // 本地DNS处理模式 - 设置更新不需要额外操作
     } catch (error) {
       console.error('Failed to update settings:', error);
       throw error;
@@ -557,42 +479,7 @@ export const AppProvider: React.FC<{children: ReactNode}> = ({children}) => {
               throw new Error('Failed to start VPN');
             }
 
-            console.log('✅ VPN service started successfully');
-
-            // 启动后立即设置当前选择的DNS服务器
-            console.log('========================================');
-            console.log('⚙️ Setting Initial DNS Configuration');
-            console.log(`Provider ID: ${settings.selectedDnsProvider}`);
-
-            const {DNS_SERVER_MAP} = await import('../constants');
-            const dnsConfig = DNS_SERVER_MAP[settings.selectedDnsProvider];
-
-            if (dnsConfig) {
-              // 根据选择的协议或自动选择
-              const protocol = settings.selectedProtocol;
-              let serverUrl: string | undefined;
-
-              // 仅使用UDP (DoH和DoT已移除)
-              serverUrl = dnsConfig.udp;
-
-              console.log(`Protocol: UDP`);
-              console.log(`DNS Server: ${serverUrl}`);
-
-              if (serverUrl) {
-                try {
-                  console.log('📤 Sending initial DNS config to VPN extension...');
-                  await vpnService.updateDNSServer(serverUrl);
-                  console.log('✅ Initial DNS server configured successfully');
-                  console.log('========================================');
-                } catch (error) {
-                  console.error('❌ Failed to set initial DNS server:', error);
-                  console.log('========================================');
-                }
-              }
-            } else {
-              console.error(`❌ No DNS configuration found for provider: ${settings.selectedDnsProvider}`);
-              console.log('========================================');
-            }
+            console.log('✅ VPN service started successfully (local DNS processing mode)');
           } catch (error) {
             console.error('VPN start error:', error);
             throw error;
