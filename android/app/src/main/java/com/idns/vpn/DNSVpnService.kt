@@ -33,9 +33,8 @@ class DNSVpnService : VpnService() {
     companion object {
         private const val TAG = "DNSVpnService"
         private const val VPN_ADDRESS = "10.0.0.2"
-        private const val VPN_ROUTE = "0.0.0.0"
-        // 本地DNS处理模式 - 使用系统默认DNS服务器
-        private const val VPN_DNS = "8.8.8.8" // 默认使用Google DNS作为系统DNS
+        private const val VPN_ROUTE = "0.0.0.0"  // 拦截所有流量
+        private const val VPN_DNS = "10.0.0.1"   // 虚拟DNS服务器，所有DNS查询会发到这里
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "DNSVpnChannel"
 
@@ -52,8 +51,11 @@ class DNSVpnService : VpnService() {
     // P0-2: Use Trie filter instead of Set (100-1000x faster)
     private val trieFilter = DNSTrieFilter()
 
-    // 本地DNS处理模式 - 使用系统DNS服务器列表
-    private val systemDNSServers = listOf("8.8.8.8", "1.1.1.1", "114.114.114.114")
+    // 用于转发DNS查询的上游服务器 (这些服务器的流量需要bypass VPN以避免路由循环)
+    private val upstreamDNSServers = listOf("114.114.114.114", "119.29.29.29", "223.5.5.5")
+
+    // 非DNS流量转发器 (TCP/UDP)
+    private val packetForwarder = PacketForwarder(this)
 
     // UDP Connection Pool for DNS queries (initialized with 'this' to enable protect())
     private val udpConnectionPool = UDPConnectionPool(vpnService = this, poolSize = 3)
@@ -192,8 +194,10 @@ class DNSVpnService : VpnService() {
 
     private fun startVPN() {
         VpnLogger.i(TAG, "========================================")
-        VpnLogger.i(TAG, "Starting VPN (Local DNS Processing Mode)...")
-        VpnLogger.i(TAG, "System DNS Servers: ${systemDNSServers.joinToString(", ")}")
+        VpnLogger.i(TAG, "Starting VPN (All DNS Interception Mode)...")
+        VpnLogger.i(TAG, "VPN Address: $VPN_ADDRESS")
+        VpnLogger.i(TAG, "VPN DNS: $VPN_DNS (virtual, forces all DNS through VPN)")
+        VpnLogger.i(TAG, "Upstream DNS: ${upstreamDNSServers.joinToString(", ")}")
         VpnLogger.i(TAG, "========================================")
 
         if (isRunning.get()) {
@@ -213,13 +217,21 @@ class DNSVpnService : VpnService() {
 
         try {
             VpnLogger.i(TAG, "Establishing VPN interface...")
-            vpnInterface = Builder()
+
+            val builder = Builder()
                 .setSession("iDNS Family Protection")
-                .addAddress(VPN_ADDRESS, 24)
-                .addRoute(VPN_ROUTE, 0)
-                .addDnsServer(VPN_DNS)  // 使用系统默认DNS
-                .setBlocking(true)
-                .establish()
+                .addAddress(VPN_ADDRESS, 24)  // 10.0.0.2/24
+                .addRoute(VPN_ROUTE, 0)       // 0.0.0.0/0 - 拦截所有流量
+                .addDnsServer(VPN_DNS)        // 10.0.0.1 - 虚拟DNS，强制所有DNS查询经过VPN
+                .setBlocking(false)           // 非阻塞模式，提高响应性
+                .setMtu(1500)
+
+            // Android 10+ 需要设置 metered 属性
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                builder.setMetered(false)
+            }
+
+            vpnInterface = builder.establish()
 
             if (vpnInterface == null) {
                 VpnLogger.e(TAG, "❌ Failed to establish VPN interface")
@@ -235,6 +247,7 @@ class DNSVpnService : VpnService() {
             }
 
             VpnLogger.i(TAG, "✅ VPN started successfully")
+            VpnLogger.i(TAG, "Mode: All traffic routed through VPN, DNS queries intercepted and processed")
 
         } catch (e: Exception) {
             VpnLogger.e(TAG, "❌ Error starting VPN", e)
@@ -316,6 +329,10 @@ class DNSVpnService : VpnService() {
      * P0-1: Optimized packet processing with fast path
      * Fast path: 90% of queries hit cache and return in 5-20μs
      * Slow path: Full processing for cache misses
+     *
+     * 处理策略:
+     * - DNS流量 (UDP port 53): 拦截并处理/过滤
+     * - 非DNS流量: 通过 PacketForwarder 转发到真实网络
      */
     private fun processPacketOptimized(packet: ByteArray, length: Int, vpnOutput: FileOutputStream) {
         try {
@@ -323,33 +340,37 @@ class DNSVpnService : VpnService() {
             if (length < 20) return
 
             val version = (packet[0].toInt() shr 4) and 0x0F
-            if (version != 4) return
+            if (version != 4) {
+                // 非IPv4包，目前不处理
+                return
+            }
 
             val ipHeaderLength = (packet[0].toInt() and 0x0F) * 4
             val protocol = packet[9].toInt() and 0xFF
 
-            // Only process UDP DNS packets
-            if (protocol != 17 || length < ipHeaderLength + 8) {
-                vpnOutput.write(packet, 0, length)
-                return
+            // 检查是否是UDP包
+            if (protocol == 17 && length >= ipHeaderLength + 8) {
+                val udpHeaderStart = ipHeaderLength
+                val destPort = ((packet[udpHeaderStart + 2].toInt() and 0xFF) shl 8) or
+                        (packet[udpHeaderStart + 3].toInt() and 0xFF)
+
+                if (destPort == 53) {
+                    // 这是DNS包，进行处理
+                    VpnLogger.d(TAG, "Processing DNS packet, length: $length")
+
+                    // P0-1: TRY FAST PATH FIRST (90% of queries)
+                    if (tryFastPath(packet, length, ipHeaderLength, vpnOutput)) {
+                        return  // Cache hit! Done in 5-20μs
+                    }
+
+                    // SLOW PATH: Cache miss, do full processing
+                    processSlowPath(packet, length, ipHeaderLength, vpnOutput)
+                    return
+                }
             }
 
-            val udpHeaderStart = ipHeaderLength
-            val destPort = ((packet[udpHeaderStart + 2].toInt() and 0xFF) shl 8) or
-                    (packet[udpHeaderStart + 3].toInt() and 0xFF)
-
-            if (destPort != 53) {
-                vpnOutput.write(packet, 0, length)
-                return
-            }
-
-            // P0-1: TRY FAST PATH FIRST (90% of queries)
-            if (tryFastPath(packet, length, ipHeaderLength, vpnOutput)) {
-                return  // Cache hit! Done in 5-20μs
-            }
-
-            // SLOW PATH: Cache miss, do full processing
-            processSlowPath(packet, length, ipHeaderLength, vpnOutput)
+            // 非DNS流量：通过 PacketForwarder 转发
+            packetForwarder.forward(packet, length, protocol, vpnOutput)
 
         } catch (e: Exception) {
             Log.e(TAG, "Error processing packet", e)
@@ -484,66 +505,10 @@ class DNSVpnService : VpnService() {
     }
 
     // Keep old processPacket for compatibility (delegates to optimized version)
+    // NOTE: 此方法已不再使用，保留仅作参考
+    @Deprecated("Use processPacketOptimized instead")
     private fun processPacket(packet: ByteArray, length: Int, vpnOutput: FileOutputStream) {
-        try {
-            // Check if this is an IP packet
-            if (length < 20) return
-
-            val version = (packet[0].toInt() shr 4) and 0x0F
-            if (version != 4) return // Only IPv4 for now
-
-            val ipHeaderLength = (packet[0].toInt() and 0x0F) * 4
-            val protocol = packet[9].toInt() and 0xFF
-
-            // Check if this is UDP (17)
-            if (protocol != 17 || length < ipHeaderLength + 8) {
-                // Not UDP, forward packet as is
-                vpnOutput.write(packet, 0, length)
-                return
-            }
-
-            // Parse UDP header
-            val udpHeaderStart = ipHeaderLength
-            val destPort = ((packet[udpHeaderStart + 2].toInt() and 0xFF) shl 8) or
-                          (packet[udpHeaderStart + 3].toInt() and 0xFF)
-
-            // Check if this is DNS (port 53)
-            if (destPort != 53) {
-                vpnOutput.write(packet, 0, length)
-                return
-            }
-
-            // Parse DNS query
-            val dnsQuery = parseDNSQuery(packet, ipHeaderLength + 8)
-            if (dnsQuery == null) {
-                vpnOutput.write(packet, 0, length)
-                return
-            }
-
-            Log.d(TAG, "DNS query for: ${dnsQuery.domain}")
-
-            // Check if domain should be blocked
-            val shouldBlock = trieFilter.shouldBlock(dnsQuery.domain)
-
-            // Send event to React Native
-            sendDNSEvent(dnsQuery.domain, shouldBlock)
-
-            if (shouldBlock) {
-                Log.d(TAG, "Blocking domain: ${dnsQuery.domain}")
-                // Create and send NXDOMAIN response
-                val blockResponse = createBlockResponse(packet, length)
-                if (blockResponse != null) {
-                    vpnOutput.write(blockResponse)
-                }
-            } else {
-                // Forward to real DNS server (UDP only)
-                Log.d(TAG, "Allowing domain: ${dnsQuery.domain}, forwarding via UDP")
-                forwardDNSQueryUDP(packet, length, dnsQuery, vpnOutput)
-            }
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Error processing packet", e)
-        }
+        processPacketOptimized(packet, length, vpnOutput)
     }
 
     private fun parseDNSQuery(packet: ByteArray, dnsStart: Int): DNSQuery? {
@@ -733,13 +698,13 @@ class DNSVpnService : VpnService() {
                 val dnsStart = udpHeaderStart + 8
                 val dnsQueryData = originalPacket.copyOfRange(dnsStart, originalLength)
 
-                // 3. 本地DNS处理模式 - 使用系统DNS服务器列表
+                // 3. DNS转发 - 使用上游DNS服务器 (这些服务器的流量通过protect()绕过VPN)
                 var responseData: ByteArray? = null
                 var lastError: Exception? = null
 
-                for ((index, server) in systemDNSServers.withIndex()) {
+                for ((index, server) in upstreamDNSServers.withIndex()) {
                     try {
-                        VpnLogger.d(TAG, "Trying DNS server $server (attempt ${index + 1}/${systemDNSServers.size}) for ${dnsQuery.domain}")
+                        VpnLogger.d(TAG, "Trying DNS server $server (attempt ${index + 1}/${upstreamDNSServers.size}) for ${dnsQuery.domain}")
                         responseData = udpConnectionPool.query(server, dnsQueryData)
                         val latency = (System.currentTimeMillis() - startTime).toInt()
                         VpnLogger.i(TAG, "✅ DNS query succeeded using $server in ${latency}ms for ${dnsQuery.domain}")
@@ -1234,5 +1199,272 @@ class DNSCache(maxSize: Int = 200) {
     fun clear() {
         cache.evictAll()
         Log.d(TAG, "Cache cleared")
+    }
+}
+
+/**
+ * PacketForwarder - 转发非DNS流量到真实网络
+ *
+ * 工作原理：
+ * 1. VPN拦截所有流量
+ * 2. DNS流量由DNSVpnService处理
+ * 3. 非DNS的UDP流量通过此类转发
+ * 4. TCP流量通过系统socket API自动处理（使用protect绕过VPN）
+ */
+class PacketForwarder(private val vpnService: VpnService) {
+    private val TAG = "PacketForwarder"
+
+    // UDP连接池
+    private val udpConnections = java.util.concurrent.ConcurrentHashMap<String, ForwarderUdpSession>()
+
+    // 执行器
+    private val executor = Executors.newCachedThreadPool()
+
+    // 清理计数器
+    private var cleanupCounter = 0
+
+    /**
+     * 转发IP包到真实网络
+     */
+    fun forward(packet: ByteArray, length: Int, protocol: Int, vpnOutput: FileOutputStream) {
+        when (protocol) {
+            17 -> forwardUdp(packet, length, vpnOutput)  // UDP (非DNS)
+            6 -> {
+                // TCP - Android VPN不需要在用户空间处理TCP
+                // TCP连接会自动使用protect()后的socket通过真实网络
+                // 这里的TCP包是应用尝试连接VPN_DNS (10.0.0.1)的流量，应该丢弃
+            }
+            1 -> {
+                // ICMP - 直接丢弃
+            }
+            else -> {
+                // 其他协议不处理
+            }
+        }
+
+        // 定期清理过期连接
+        if (++cleanupCounter >= 100) {
+            cleanupCounter = 0
+            cleanupExpiredConnections()
+        }
+    }
+
+    /**
+     * 转发UDP流量 (非DNS)
+     */
+    private fun forwardUdp(packet: ByteArray, length: Int, vpnOutput: FileOutputStream) {
+        try {
+            val ipHeaderLength = (packet[0].toInt() and 0x0F) * 4
+
+            // 解析IP头
+            val srcIP = "${packet[12].toInt() and 0xFF}.${packet[13].toInt() and 0xFF}.${packet[14].toInt() and 0xFF}.${packet[15].toInt() and 0xFF}"
+            val dstIP = "${packet[16].toInt() and 0xFF}.${packet[17].toInt() and 0xFF}.${packet[18].toInt() and 0xFF}.${packet[19].toInt() and 0xFF}"
+
+            // 解析UDP头
+            val udpHeaderStart = ipHeaderLength
+            val srcPort = ((packet[udpHeaderStart].toInt() and 0xFF) shl 8) or (packet[udpHeaderStart + 1].toInt() and 0xFF)
+            val dstPort = ((packet[udpHeaderStart + 2].toInt() and 0xFF) shl 8) or (packet[udpHeaderStart + 3].toInt() and 0xFF)
+
+            val connectionKey = "$srcIP:$srcPort-$dstIP:$dstPort"
+
+            // 获取或创建UDP会话
+            var session = udpConnections[connectionKey]
+            if (session == null || session.isExpired()) {
+                session?.close()
+                session = ForwarderUdpSession(vpnService, dstIP, dstPort, srcIP, srcPort, vpnOutput)
+                udpConnections[connectionKey] = session
+                executor.execute {
+                    session.startReceiving()
+                }
+            }
+
+            // 提取并转发UDP数据
+            val dataStart = ipHeaderLength + 8
+            if (length > dataStart) {
+                val data = packet.copyOfRange(dataStart, length)
+                session.send(data)
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error forwarding UDP", e)
+        }
+    }
+
+    private fun cleanupExpiredConnections() {
+        val iterator = udpConnections.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            if (entry.value.isExpired()) {
+                entry.value.close()
+                iterator.remove()
+            }
+        }
+    }
+
+    fun close() {
+        udpConnections.values.forEach { it.close() }
+        udpConnections.clear()
+        executor.shutdownNow()
+    }
+}
+
+/**
+ * UDP会话处理类 - 用于转发非DNS的UDP流量
+ */
+class ForwarderUdpSession(
+    private val vpnService: VpnService,
+    private val remoteIP: String,
+    private val remotePort: Int,
+    private val localIP: String,
+    private val localPort: Int,
+    private val vpnOutput: FileOutputStream
+) {
+    private val TAG = "ForwarderUdpSession"
+    private var socket: DatagramSocket? = null
+    @Volatile private var isRunning = true
+    private var lastActivityTime = System.currentTimeMillis()
+    private val sessionTimeout = 60000L // 60秒超时
+
+    init {
+        try {
+            socket = DatagramSocket()
+            vpnService.protect(socket!!)
+            socket!!.soTimeout = 5000  // 5秒接收超时
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to create UDP socket", e)
+        }
+    }
+
+    fun send(data: ByteArray) {
+        lastActivityTime = System.currentTimeMillis()
+        try {
+            val packet = DatagramPacket(
+                data, data.size,
+                InetAddress.getByName(remoteIP), remotePort
+            )
+            socket?.send(packet)
+        } catch (e: Exception) {
+            Log.e(TAG, "UDP send error to $remoteIP:$remotePort", e)
+        }
+    }
+
+    fun startReceiving() {
+        try {
+            val buffer = ByteArray(65535)
+            while (isRunning && !isExpired()) {
+                val packet = DatagramPacket(buffer, buffer.size)
+                try {
+                    socket?.receive(packet)
+                    if (packet.length > 0) {
+                        lastActivityTime = System.currentTimeMillis()
+                        sendToVpn(buffer.copyOfRange(0, packet.length))
+                    }
+                } catch (e: java.net.SocketTimeoutException) {
+                    // 继续等待，除非已过期
+                    continue
+                }
+            }
+        } catch (e: Exception) {
+            if (isRunning) {
+                Log.e(TAG, "UDP receive error", e)
+            }
+        } finally {
+            close()
+        }
+    }
+
+    fun isExpired(): Boolean {
+        return System.currentTimeMillis() - lastActivityTime > sessionTimeout
+    }
+
+    private fun sendToVpn(data: ByteArray) {
+        try {
+            // 构建完整的IP+UDP响应包
+            val ipHeaderLength = 20
+            val udpHeaderLength = 8
+            val totalLength = ipHeaderLength + udpHeaderLength + data.size
+
+            val responsePacket = ByteArray(totalLength)
+
+            // IP头
+            responsePacket[0] = 0x45.toByte()  // Version 4, IHL 5
+            responsePacket[1] = 0x00.toByte()  // TOS
+            responsePacket[2] = (totalLength shr 8).toByte()
+            responsePacket[3] = totalLength.toByte()
+            responsePacket[4] = 0x00.toByte()  // ID
+            responsePacket[5] = 0x00.toByte()
+            responsePacket[6] = 0x40.toByte()  // Flags (Don't Fragment)
+            responsePacket[7] = 0x00.toByte()
+            responsePacket[8] = 0x40.toByte()  // TTL
+            responsePacket[9] = 0x11.toByte()  // Protocol: UDP
+            responsePacket[10] = 0x00.toByte() // Checksum
+            responsePacket[11] = 0x00.toByte()
+
+            // 源IP (远程IP)
+            val srcIpParts = remoteIP.split(".")
+            responsePacket[12] = srcIpParts[0].toInt().toByte()
+            responsePacket[13] = srcIpParts[1].toInt().toByte()
+            responsePacket[14] = srcIpParts[2].toInt().toByte()
+            responsePacket[15] = srcIpParts[3].toInt().toByte()
+
+            // 目标IP (本地IP)
+            val dstIpParts = localIP.split(".")
+            responsePacket[16] = dstIpParts[0].toInt().toByte()
+            responsePacket[17] = dstIpParts[1].toInt().toByte()
+            responsePacket[18] = dstIpParts[2].toInt().toByte()
+            responsePacket[19] = dstIpParts[3].toInt().toByte()
+
+            // 计算IP校验和
+            calculateIpChecksum(responsePacket)
+
+            // UDP头
+            responsePacket[20] = (remotePort shr 8).toByte()
+            responsePacket[21] = remotePort.toByte()
+            responsePacket[22] = (localPort shr 8).toByte()
+            responsePacket[23] = localPort.toByte()
+            val udpLength = udpHeaderLength + data.size
+            responsePacket[24] = (udpLength shr 8).toByte()
+            responsePacket[25] = udpLength.toByte()
+            responsePacket[26] = 0x00.toByte()
+            responsePacket[27] = 0x00.toByte()
+
+            // 复制数据
+            System.arraycopy(data, 0, responsePacket, 28, data.size)
+
+            // 写回VPN
+            synchronized(vpnOutput) {
+                vpnOutput.write(responsePacket)
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Error sending to VPN", e)
+        }
+    }
+
+    private fun calculateIpChecksum(packet: ByteArray) {
+        packet[10] = 0
+        packet[11] = 0
+
+        var sum = 0L
+        for (i in 0 until 20 step 2) {
+            sum += ((packet[i].toInt() and 0xFF) shl 8) or (packet[i + 1].toInt() and 0xFF)
+        }
+
+        while (sum shr 16 != 0L) {
+            sum = (sum and 0xFFFF) + (sum shr 16)
+        }
+
+        val checksum = (sum.inv() and 0xFFFF).toInt()
+        packet[10] = (checksum shr 8).toByte()
+        packet[11] = checksum.toByte()
+    }
+
+    fun close() {
+        isRunning = false
+        try {
+            socket?.close()
+        } catch (e: Exception) {
+            // ignore
+        }
     }
 }
