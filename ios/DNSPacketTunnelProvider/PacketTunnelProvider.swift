@@ -51,9 +51,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var pendingResponseCallbacks: [String: [(Data, UInt32)]] = [:]
     private let pendingResponseLock = NSLock()
 
-    // 本地DNS处理 - 使用系统DNS服务器进行解析（用于非拦截的域名）
-    // 这些服务器仅用于转发未被拦截的DNS查询
-    private let systemDNSServers = ["8.8.8.8", "1.1.1.1", "114.114.114.114"]
+    // DoH (DNS over HTTPS) 配置
+    // 使用加密的HTTPS协议进行DNS查询，提供隐私保护
+    private let dohServerURL = "https://i-dns.wnluo.com/dns-query"
+    private var dohSession: URLSession!
+    private var ednsDoEnabled = false
 
     // App Group for sharing data with main app
     private let appGroupIdentifier = "group.com.idns.wnlluo"
@@ -63,16 +65,30 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func startTunnel(options: [String : NSObject]?, completionHandler: @escaping (Error?) -> Void) {
         os_log("========================================", log: logger, type: .info)
-        os_log("🚀 Starting VPN tunnel (Local DNS Processing Mode)", log: logger, type: .info)
+        os_log("🚀 Starting VPN tunnel (DoH Mode)", log: logger, type: .info)
         os_log("========================================", log: logger, type: .info)
 
-        // 本地DNS处理模式 - 直接启动隧道
+        // Initialize DoH session
+        initializeDoHSession()
+
+        // DoH模式 - 直接启动隧道
         continueStartTunnel(options: options, completionHandler: completionHandler)
     }
 
+    private func initializeDoHSession() {
+        let config = URLSessionConfiguration.default
+        config.httpMaximumConnectionsPerHost = 10
+        config.timeoutIntervalForRequest = 5.0
+        config.timeoutIntervalForResource = 10.0
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+
+        dohSession = URLSession(configuration: config)
+        os_log("✓ DoH session initialized", log: logger, type: .info)
+    }
+
     private func continueStartTunnel(options: [String : NSObject]?, completionHandler: @escaping (Error?) -> Void) {
-        os_log("Mode: Local DNS Processing (No External DNS Providers)", log: logger, type: .info)
-        os_log("System DNS Servers: %{public}@", log: logger, type: .info, systemDNSServers.joined(separator: ", "))
+        os_log("Mode: DoH (DNS over HTTPS)", log: logger, type: .info)
+        os_log("DoH Server: %{public}@", log: logger, type: .info, dohServerURL)
 
         // Load blacklist and whitelist from shared storage
         loadFilterRules()
@@ -231,6 +247,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             // 本地DNS处理模式 - 忽略DNS服务器更新请求
             os_log("DNS update request ignored (Local DNS Processing Mode)", log: logger, type: .info)
 
+        case "updateEDNS":
+            if let enabled = message.ednsDoEnabled {
+                ednsDoEnabled = enabled
+                os_log("Updated EDNS DO setting: %{public}@", log: logger, type: .info, enabled ? "true" : "false")
+            }
+
         default:
             os_log("Unknown message type: %{public}@", log: logger, type: .error, message.type)
         }
@@ -258,13 +280,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
         ipv4Settings.includedRoutes = [googleDNS1, googleDNS2, cloudflareDNS, aliDNS1, aliDNS2]
 
-        // 排除用于转发的系统DNS服务器，避免路由循环
-        var excludedRoutes: [NEIPv4Route] = []
-        for server in systemDNSServers {
-            let route = NEIPv4Route(destinationAddress: server, subnetMask: "255.255.255.255")
-            excludedRoutes.append(route)
-        }
-        ipv4Settings.excludedRoutes = excludedRoutes
+        // DoH 模式 - 不需要排除路由（DoH 使用 HTTPS 而非 UDP）
+        // 所有流量通过正常网络连接，不会产生路由循环
+        ipv4Settings.excludedRoutes = []
 
         settings.ipv4Settings = ipv4Settings
 
@@ -274,12 +292,12 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         settings.dnsSettings = dnsSettings
 
         os_log("========================================", log: logger, type: .info)
-        os_log("✓ VPN tunnel settings configured (Local DNS Processing)", log: logger, type: .info)
-        os_log("  Mode: Local DNS Filtering (No External Providers)", log: logger, type: .info)
-        os_log("  DNS queries are filtered locally", log: logger, type: .info)
+        os_log("✓ VPN tunnel settings configured (DoH Mode)", log: logger, type: .info)
+        os_log("  Mode: DNS over HTTPS (DoH)", log: logger, type: .info)
+        os_log("  DoH Server: %{public}@", log: logger, type: .info, dohServerURL)
+        os_log("  DNS queries encrypted via HTTPS", log: logger, type: .info)
         os_log("  Blocked domains return NXDOMAIN", log: logger, type: .info)
-        os_log("  Allowed domains forwarded to system DNS", log: logger, type: .info)
-        os_log("  System DNS: %{public}@", log: logger, type: .info, systemDNSServers.joined(separator: ", "))
+        os_log("  Allowed domains forwarded to DoH server", log: logger, type: .info)
         os_log("========================================", log: logger, type: .info)
 
         // MTU
@@ -423,14 +441,14 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             // Send event with 0 latency for blocked domains
             sendDNSEvent(domain: dnsQuery.domain, blocked: true, latency: 0, queryType: dnsQuery.queryType)
         } else {
-            // 本地DNS处理模式 - 转发到系统DNS服务器
+            // DoH模式 - 转发到DoH服务器
             os_log("✅ Allowing domain: %{public}@", log: logger, type: .info, dnsQuery.domain)
-            forwardDNSQueryToSystemDNS(dnsQuery: dnsQuery, originalPacket: packet, protocolNumber: protocolNumber)
+            forwardDNSQueryDoH(dnsQuery: dnsQuery, originalPacket: packet, protocolNumber: protocolNumber)
         }
     }
 
-    /// 本地DNS处理模式 - 转发DNS查询到系统DNS服务器
-    private func forwardDNSQueryToSystemDNS(dnsQuery: DNSQuery, originalPacket: Data, protocolNumber: UInt32) {
+    /// DoH模式 - 使用HTTPS协议转发DNS查询
+    private func forwardDNSQueryDoH(dnsQuery: DNSQuery, originalPacket: Data, protocolNumber: UInt32) {
         let startTime = Date()
 
         // 1. 检查缓存
@@ -462,155 +480,74 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
 
-        let dnsQueryData = originalPacket.subdata(in: dnsStart..<originalPacket.count)
+        let rawDnsQueryData = originalPacket.subdata(in: dnsStart..<originalPacket.count)
+        let dnsQueryData = ensureEdnsForDoHQuery(rawDnsQueryData)
 
-        // 3. 尝试系统DNS服务器
-        trySystemDNSServers(
-            dnsQueryData: dnsQueryData,
-            serverIndex: 0,
-            startTime: startTime,
-            dnsQuery: dnsQuery,
-            originalPacket: originalPacket,
-            protocolNumber: protocolNumber,
-            ipHeaderLength: ipHeaderLength
-        )
-    }
+        // 3. 使用 DoH 查询
+        os_log("📤 Sending DoH query for: %{public}@", log: logger, type: .debug, dnsQuery.domain)
 
-    /// 递归尝试系统DNS服务器直到成功
-    private func trySystemDNSServers(
-        dnsQueryData: Data,
-        serverIndex: Int,
-        startTime: Date,
-        dnsQuery: DNSQuery,
-        originalPacket: Data,
-        protocolNumber: UInt32,
-        ipHeaderLength: Int
-    ) {
-        guard serverIndex < systemDNSServers.count else {
-            os_log("❌ All system DNS servers failed for: %{public}@", log: logger, type: .error, dnsQuery.domain)
+        guard let url = URL(string: dohServerURL) else {
+            os_log("❌ Invalid DoH URL", log: logger, type: .error)
             sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: 0, resolvedIP: "", queryType: dnsQuery.queryType)
             return
         }
 
-        let server = systemDNSServers[serverIndex]
-        os_log("🔍 Trying system DNS: %{public}@ for %{public}@", log: logger, type: .debug, server, dnsQuery.domain)
+        // Create HTTP POST request
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.httpBody = dnsQueryData
+        request.setValue("application/dns-message", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/dns-message", forHTTPHeaderField: "Accept")
 
-        let connection = NWConnection(
-            host: NWEndpoint.Host(server),
-            port: 53,
-            using: .udp
-        )
-
-        let timeoutWorkItem = DispatchWorkItem { [weak self] in
+        // Execute DoH request
+        let task = dohSession.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
-            os_log("⏱ DNS timeout on %{public}@", log: self.logger, type: .error, server)
-            connection.cancel()
-            // 尝试下一个服务器
-            self.trySystemDNSServers(
-                dnsQueryData: dnsQueryData,
-                serverIndex: serverIndex + 1,
-                startTime: startTime,
-                dnsQuery: dnsQuery,
+
+            let latency = Int(Date().timeIntervalSince(startTime) * 1000)
+
+            // Check for errors
+            if let error = error {
+                os_log("❌ DoH request failed: %{public}@", log: self.logger, type: .error, error.localizedDescription)
+                self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: 0, resolvedIP: "", queryType: dnsQuery.queryType)
+                return
+            }
+
+            // Check HTTP status
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
+                os_log("❌ DoH HTTP error: %d", log: self.logger, type: .error, httpResponse.statusCode)
+                self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: 0, resolvedIP: "", queryType: dnsQuery.queryType)
+                return
+            }
+
+            // Check response data
+            guard let responseData = data, !responseData.isEmpty else {
+                os_log("❌ Empty DoH response", log: self.logger, type: .error)
+                self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: 0, resolvedIP: "", queryType: dnsQuery.queryType)
+                return
+            }
+
+            os_log("✅ DoH query succeeded in %dms", log: self.logger, type: .info, latency)
+
+            // 4. 缓存响应
+            self.cacheDNSResponse(domain: dnsQuery.domain, response: responseData, queryType: dnsQuery.queryType)
+
+            // 5. 解析IP并发送事件
+            let resolvedIP = self.parseResolvedIP(from: responseData) ?? ""
+            self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: resolvedIP, dnsResponse: responseData, queryType: dnsQuery.queryType)
+
+            os_log("✅ DNS resolved: %{public}@ -> %{public}@ (%dms)", log: self.logger, type: .info, dnsQuery.domain, resolvedIP, latency)
+
+            // 6. 构建并发送响应包
+            if let responsePacket = self.createDNSResponsePacket(
                 originalPacket: originalPacket,
-                protocolNumber: protocolNumber,
+                dnsResponse: responseData,
                 ipHeaderLength: ipHeaderLength
-            )
-        }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5.0, execute: timeoutWorkItem)
-
-        connection.stateUpdateHandler = { [weak self] state in
-            guard let self = self else { return }
-
-            switch state {
-            case .ready:
-                connection.send(content: dnsQueryData, completion: .contentProcessed { error in
-                    if let error = error {
-                        os_log("❌ Failed to send DNS query: %{public}@", log: self.logger, type: .error, error.localizedDescription)
-                        timeoutWorkItem.cancel()
-                        connection.cancel()
-                        self.trySystemDNSServers(
-                            dnsQueryData: dnsQueryData,
-                            serverIndex: serverIndex + 1,
-                            startTime: startTime,
-                            dnsQuery: dnsQuery,
-                            originalPacket: originalPacket,
-                            protocolNumber: protocolNumber,
-                            ipHeaderLength: ipHeaderLength
-                        )
-                        return
-                    }
-
-                    connection.receiveMessage { content, _, _, error in
-                        timeoutWorkItem.cancel()
-                        connection.cancel()
-
-                        let latency = Int(Date().timeIntervalSince(startTime) * 1000)
-
-                        if let error = error {
-                            os_log("❌ Failed to receive DNS response: %{public}@", log: self.logger, type: .error, error.localizedDescription)
-                            self.trySystemDNSServers(
-                                dnsQueryData: dnsQueryData,
-                                serverIndex: serverIndex + 1,
-                                startTime: startTime,
-                                dnsQuery: dnsQuery,
-                                originalPacket: originalPacket,
-                                protocolNumber: protocolNumber,
-                                ipHeaderLength: ipHeaderLength
-                            )
-                            return
-                        }
-
-                        guard let responseData = content else {
-                            os_log("❌ Empty DNS response", log: self.logger, type: .error)
-                            self.trySystemDNSServers(
-                                dnsQueryData: dnsQueryData,
-                                serverIndex: serverIndex + 1,
-                                startTime: startTime,
-                                dnsQuery: dnsQuery,
-                                originalPacket: originalPacket,
-                                protocolNumber: protocolNumber,
-                                ipHeaderLength: ipHeaderLength
-                            )
-                            return
-                        }
-
-                        // 解析并缓存响应
-                        let resolvedIP = self.parseResolvedIP(from: responseData) ?? ""
-                        self.cacheDNSResponse(domain: dnsQuery.domain, response: responseData, queryType: dnsQuery.queryType)
-                        self.sendDNSEvent(domain: dnsQuery.domain, blocked: false, latency: latency, resolvedIP: resolvedIP, dnsResponse: responseData, queryType: dnsQuery.queryType)
-
-                        os_log("✅ DNS resolved: %{public}@ -> %{public}@ (%dms)", log: self.logger, type: .info, dnsQuery.domain, resolvedIP, latency)
-
-                        if let responsePacket = self.createDNSResponsePacket(
-                            originalPacket: originalPacket,
-                            dnsResponse: responseData,
-                            ipHeaderLength: ipHeaderLength
-                        ) {
-                            self.packetFlow.writePackets([responsePacket], withProtocols: [NSNumber(value: protocolNumber)])
-                        }
-                    }
-                })
-
-            case .failed(let error):
-                os_log("❌ DNS connection failed: %{public}@", log: self.logger, type: .error, error.localizedDescription)
-                timeoutWorkItem.cancel()
-                connection.cancel()
-                self.trySystemDNSServers(
-                    dnsQueryData: dnsQueryData,
-                    serverIndex: serverIndex + 1,
-                    startTime: startTime,
-                    dnsQuery: dnsQuery,
-                    originalPacket: originalPacket,
-                    protocolNumber: protocolNumber,
-                    ipHeaderLength: ipHeaderLength
-                )
-
-            default:
-                break
+            ) {
+                self.packetFlow.writePackets([responsePacket], withProtocols: [NSNumber(value: protocolNumber)])
             }
         }
 
-        connection.start(queue: .global(qos: .userInitiated))
+        task.resume()
     }
 
     // MARK: - Legacy DNS Forwarding (保留但不再使用)
@@ -618,10 +555,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     // MARK: - Legacy Functions (已移除 DoH/DoT 相关代码)
 
     private func forwardDNSQueryUDPLegacy(dnsQuery: DNSQuery, originalPacket: Data, protocolNumber: UInt32) {
-        // 重定向到新的系统DNS处理函数
-        forwardDNSQueryToSystemDNS(dnsQuery: dnsQuery, originalPacket: originalPacket, protocolNumber: protocolNumber)
+        // 重定向到 DoH 处理函数
+        forwardDNSQueryDoH(dnsQuery: dnsQuery, originalPacket: originalPacket, protocolNumber: protocolNumber)
     }
 
+    // DEPRECATED: Legacy UDP DNS forwarding code
     private func forwardDNSQueryUDPLegacyOriginal(dnsQuery: DNSQuery, originalPacket: Data, protocolNumber: UInt32) {
         let startTime = Date()
 
@@ -819,13 +757,126 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         // Using 1232 as recommended by RFC 8467 to avoid fragmentation
         packet.append(contentsOf: [0x04, 0xD0])
         // TTL: Extended RCODE and flags (4 bytes)
-        // Extended RCODE: 0, Version: 0, DO bit: 0, Z: 0
-        packet.append(contentsOf: [0x00, 0x00, 0x00, 0x00])
+        // Extended RCODE: 0, Version: 0, DO bit optional
+        let flags: UInt16 = ednsDoEnabled ? 0x8000 : 0x0000
+        packet.append(0x00)
+        packet.append(0x00)
+        packet.append(UInt8(flags >> 8))
+        packet.append(UInt8(flags & 0xFF))
         // RDLENGTH: 0 (no additional data) (2 bytes)
         packet.append(contentsOf: [0x00, 0x00])
         // RDATA: empty
 
         return packet
+    }
+
+    private func ensureEdnsForDoHQuery(_ query: Data) -> Data {
+        guard query.count >= 12 else { return query }
+
+        var data = query
+        let qdCount = Int(readUInt16(data, 4))
+        var offset = 12
+
+        for _ in 0..<qdCount {
+            guard let nextOffset = skipDNSName(data, offset: offset) else { return query }
+            offset = nextOffset + 4
+            if offset > data.count { return query }
+        }
+
+        let arCount = Int(readUInt16(data, 10))
+        var foundOpt = false
+
+        for _ in 0..<arCount {
+            guard let nameOffset = skipDNSName(data, offset: offset) else { return data }
+            if nameOffset + 10 > data.count { return data }
+
+            let type = readUInt16(data, nameOffset)
+            let rdLength = Int(readUInt16(data, nameOffset + 8))
+
+            if type == 41 {
+                foundOpt = true
+                writeUInt16(&data, offset: nameOffset + 2, value: 1232)
+
+                let ttl = readUInt32(data, nameOffset + 4)
+                let extRcode = UInt32((ttl >> 24) & 0xFF)
+                let version = UInt32((ttl >> 16) & 0xFF)
+                var flags = UInt16(ttl & 0xFFFF)
+                if ednsDoEnabled {
+                    flags |= 0x8000
+                } else {
+                    flags &= ~0x8000
+                }
+                let newTtl = (extRcode << 24) | (version << 16) | UInt32(flags)
+                writeUInt32(&data, offset: nameOffset + 4, value: newTtl)
+            }
+
+            offset = nameOffset + 10 + rdLength
+            if offset > data.count { break }
+        }
+
+        if foundOpt {
+            return data
+        }
+
+        var updated = data
+        let newArCount = UInt16(arCount + 1)
+        writeUInt16(&updated, offset: 10, value: newArCount)
+
+        var opt = Data()
+        opt.append(0x00)
+        opt.append(contentsOf: [0x00, 0x29])
+        opt.append(contentsOf: [0x04, 0xD0])
+        let flags: UInt16 = ednsDoEnabled ? 0x8000 : 0x0000
+        opt.append(UInt8(0))
+        opt.append(UInt8(0))
+        opt.append(UInt8(flags >> 8))
+        opt.append(UInt8(flags & 0xFF))
+        opt.append(contentsOf: [0x00, 0x00])
+
+        updated.append(opt)
+        return updated
+    }
+
+    private func readUInt16(_ data: Data, _ offset: Int) -> UInt16 {
+        guard offset + 1 < data.count else { return 0 }
+        return (UInt16(data[offset]) << 8) | UInt16(data[offset + 1])
+    }
+
+    private func readUInt32(_ data: Data, _ offset: Int) -> UInt32 {
+        guard offset + 3 < data.count else { return 0 }
+        return (UInt32(data[offset]) << 24) |
+            (UInt32(data[offset + 1]) << 16) |
+            (UInt32(data[offset + 2]) << 8) |
+            UInt32(data[offset + 3])
+    }
+
+    private func writeUInt16(_ data: inout Data, offset: Int, value: UInt16) {
+        guard offset + 1 < data.count else { return }
+        data[offset] = UInt8((value >> 8) & 0xFF)
+        data[offset + 1] = UInt8(value & 0xFF)
+    }
+
+    private func writeUInt32(_ data: inout Data, offset: Int, value: UInt32) {
+        guard offset + 3 < data.count else { return }
+        data[offset] = UInt8((value >> 24) & 0xFF)
+        data[offset + 1] = UInt8((value >> 16) & 0xFF)
+        data[offset + 2] = UInt8((value >> 8) & 0xFF)
+        data[offset + 3] = UInt8(value & 0xFF)
+    }
+
+    private func skipDNSName(_ data: Data, offset: Int) -> Int? {
+        var index = offset
+        while index < data.count {
+            let length = Int(data[index])
+            if length & 0xC0 == 0xC0 {
+                return index + 2
+            }
+            if length == 0 {
+                return index + 1
+            }
+            index += 1 + length
+        }
+        return nil
     }
 
     // MARK: - CNAME Resolution (本地DNS处理模式)
@@ -1430,10 +1481,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
 
+        // Check if DoH server blocked this domain (returns special IPs)
+        let isDohBlocked = resolvedIP == "0.0.0.0" || resolvedIP == "::" || resolvedIP == "::0"
+
         // Determine display info based on status and resolved IP
         let displayInfo: String
         if blocked {
-            displayInfo = "已拦截"
+            displayInfo = "已拦截"  // Locally blocked
+        } else if isDohBlocked {
+            displayInfo = "已拦截"  // DoH server blocking
         } else if resolvedIP.isEmpty {
             // Check DNS response RCODE to differentiate error types
             if let response = dnsResponse, response.count > 3 {
@@ -1449,11 +1505,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             } else {
                 displayInfo = "解析失败"
             }
-        } else if resolvedIP == "0.0.0.0" || resolvedIP == "::" || resolvedIP == "::0" {
-            // DoH server blocked the domain (returns 0.0.0.0 or ::)
-            displayInfo = "已拦截"
         } else {
-            displayInfo = resolvedIP
+            displayInfo = resolvedIP  // Normal IP address
         }
 
         // LOG FILTER: Skip logging meaningless "no record" queries
@@ -1484,10 +1537,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
 
+        // Status should be "blocked" if either locally blocked OR blocked by DoH server
+        let actualStatus = (blocked || isDohBlocked) ? "blocked" : "allowed"
+
         let event: [String: Any] = [
             "domain": domain,
             "timestamp": ISO8601DateFormatter().string(from: Date()),
-            "status": blocked ? "blocked" : "allowed",
+            "status": actualStatus,
             "category": displayInfo,  // Now stores IP address or status
             "latency": latency
         ]
@@ -1699,7 +1755,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             if length & 0xC0 == 0xC0 {
                 // Pointer to another location in the full response
                 guard index + 1 < data.count else { break }
-                let pointer = ((Int(data[index]) & 0x3F) << 8) | Int(data[index + 1])
+                let _ = ((Int(data[index]) & 0x3F) << 8) | Int(data[index + 1])  // Pointer unused
                 // We could recursively parse from fullResponse[pointer], but for now just return what we have
                 break
             }
@@ -1726,6 +1782,9 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             os_log("Failed to access shared defaults", log: logger, type: .error)
             return
         }
+
+        ednsDoEnabled = sharedDefaults.bool(forKey: "ednsDoEnabled")
+        os_log("EDNS DO enabled: %{public}@", log: logger, type: .info, ednsDoEnabled ? "true" : "false")
 
         if let savedBlacklist = sharedDefaults.array(forKey: "blacklist") as? [String] {
             blacklist = Set(savedBlacklist.map { $0.lowercased() })
@@ -1918,15 +1977,16 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         params.expiredDNSBehavior = .allow  // Allow expired DNS for bootstrap
         params.multipathServiceType = .handover  // Use best available network
 
-        // 本地DNS处理模式 - 使用第一个系统DNS服务器
-        let dnsServerAddress = systemDNSServers.first ?? "8.8.8.8"
+        // DoH 模式 - 不再使用 UDP 连接
+        // 此函数已被弃用，DNS 查询现在通过 DoH (HTTPS) 进行
+        let dnsServerAddress = "8.8.8.8"  // Fallback only
         let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(dnsServerAddress), port: 53)
         let connection = NWConnection(to: endpoint, using: params)
 
         // Track connection creation time for health monitoring
         let connectionCreatedAt = Date()
 
-        connection.stateUpdateHandler = { [weak self] state in
+        connection.stateUpdateHandler = { [weak self] (state: NWConnection.State) in
             guard let self = self else { return }
 
             switch state {
@@ -2136,4 +2196,5 @@ struct VPNMessage: Codable {
     let type: String
     let domain: String?
     let dnsServer: String?
+    let ednsDoEnabled: Bool?
 }

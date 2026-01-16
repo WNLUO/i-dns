@@ -199,6 +199,22 @@ class DNSVPNModule: RCTEventEmitter {
         }
     }
 
+    @objc func setEdnsDoEnabled(_ enabled: Bool,
+                               resolver resolve: @escaping RCTPromiseResolveBlock,
+                               rejecter reject: @escaping RCTPromiseRejectBlock) {
+
+        updateSharedEdnsDo(enabled: enabled)
+
+        sendMessageToProvider(type: "updateEDNS", ednsDoEnabled: enabled) { error in
+            if let error = error {
+                print("⚠️ Failed to send EDNS update to provider: \(error.localizedDescription)")
+                resolve(nil)
+            } else {
+                resolve(nil)
+            }
+        }
+    }
+
     // MARK: - Private Methods
 
     private func loadVPNConfiguration(completion: ((Error?) -> Void)? = nil) {
@@ -440,20 +456,21 @@ class DNSVPNModule: RCTEventEmitter {
         sendEvent(withName: "DNSRequest", body: lastEvent)
     }
 
-    private func sendMessageToProvider(type: String, domain: String? = nil, dnsServer: String? = nil, completion: @escaping (Error?) -> Void) {
+    private func sendMessageToProvider(type: String, domain: String? = nil, dnsServer: String? = nil, ednsDoEnabled: Bool? = nil, completion: @escaping (Error?) -> Void) {
         guard let manager = vpnManager,
               let session = manager.connection as? NETunnelProviderSession else {
             completion(NSError(domain: "DNSVPNModule", code: -1, userInfo: [NSLocalizedDescriptionKey: "VPN not connected"]))
             return
         }
 
-        let message: [String: String?] = [
+        let message: [String: Any?] = [
             "type": type,
             "domain": domain,
-            "dnsServer": dnsServer
+            "dnsServer": dnsServer,
+            "ednsDoEnabled": ednsDoEnabled
         ]
 
-        guard let messageData = try? JSONEncoder().encode(message) else {
+        guard let messageData = try? JSONSerialization.data(withJSONObject: message.compactMapValues { $0 }, options: []) else {
             completion(NSError(domain: "DNSVPNModule", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to encode message"]))
             return
         }
@@ -505,5 +522,14 @@ class DNSVPNModule: RCTEventEmitter {
 
         sharedDefaults.set(whitelist, forKey: "whitelist")
         // Note: synchronize() is deprecated in iOS 12+. UserDefaults auto-saves.
+    }
+
+    private func updateSharedEdnsDo(enabled: Bool) {
+        guard let sharedDefaults = UserDefaults(suiteName: appGroupIdentifier) else {
+            print("⚠️ Failed to access App Group shared storage for EDNS update")
+            return
+        }
+
+        sharedDefaults.set(enabled, forKey: "ednsDoEnabled")
     }
 }

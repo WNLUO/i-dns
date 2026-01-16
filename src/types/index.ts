@@ -13,7 +13,8 @@ export interface ChartDataPoint {
   allowed: number;
 }
 
-// 本地DNS处理模式 - 不再需要协议、服务商等类型
+// DoH (DNS over HTTPS) 模式
+// 使用加密的 HTTPS 协议连接到 i-dns.wnluo.com 进行 DNS 查询
 export type Tab = 'home' | 'stats' | 'logs' | 'settings';
 
 // 日志保留时间选项
@@ -28,11 +29,12 @@ export interface DomainRule {
   note?: string;
 }
 
-// 应用设置 - 简化版（本地DNS处理模式）
+// 应用设置 - DoH 模式
 export interface AppSettings {
   autoStart: boolean; // 开机自启
   childProtectionMode: boolean; // 儿童保护模式
   notificationsEnabled: boolean; // 通知提醒
+  dnssecEnabled: boolean; // DNSSEC (EDNS DO) 开关
   logRetentionPeriod: LogRetentionPeriod; // 日志保留时间
 }
 
@@ -50,6 +52,15 @@ export interface Statistics {
     unknown: number;
   };
   chartData: ChartDataPoint[];
+  blockRateHistory?: BlockRateHistoryPoint[]; // 拦截率历史数据（可选）
+}
+
+// 拦截率历史数据点
+export interface BlockRateHistoryPoint {
+  date: string; // YYYY-MM-DD
+  blockRate: number; // 拦截率百分比
+  totalRequests: number; // 总请求数
+  blockedRequests: number; // 拦截数量
 }
 
 // 每日统计数据

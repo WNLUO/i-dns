@@ -51,14 +51,12 @@ class DNSVpnService : VpnService() {
     // P0-2: Use Trie filter instead of Set (100-1000x faster)
     private val trieFilter = DNSTrieFilter()
 
-    // 用于转发DNS查询的上游服务器 (这些服务器的流量需要bypass VPN以避免路由循环)
-    private val upstreamDNSServers = listOf("114.114.114.114", "119.29.29.29", "223.5.5.5")
+    // DoH (DNS over HTTPS) Client - 使用加密的HTTPS协议查询DNS
+    // DoH 服务器: https://i-dns.wnluo.com/dns-query
+    private val dohClient = DNSDoHClient(dohServerUrl = "https://i-dns.wnluo.com/dns-query")
 
     // 非DNS流量转发器 (TCP/UDP)
     private val packetForwarder = PacketForwarder(this)
-
-    // UDP Connection Pool for DNS queries (initialized with 'this' to enable protect())
-    private val udpConnectionPool = UDPConnectionPool(vpnService = this, poolSize = 3)
 
     // Thread pool for DNS queries (limit concurrent threads)
     private var dnsQueryExecutor = Executors.newFixedThreadPool(10) as ThreadPoolExecutor
@@ -77,6 +75,8 @@ class DNSVpnService : VpnService() {
         override fun initialValue() = ByteBuffer.allocate(32767)
     }
 
+    private var ednsDoEnabled = false
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -86,6 +86,7 @@ class DNSVpnService : VpnService() {
         VpnLogger.i(TAG, "=== VPN Service onCreate ===")
 
         loadFilterRules()
+        loadEdnsSetting()
 
         // Log optimization status
         VpnLogger.i(TAG, "===========================================")
@@ -96,7 +97,9 @@ class DNSVpnService : VpnService() {
         VpnLogger.i(TAG, "  - P1-1: Zero-copy DNS parsing")
         VpnLogger.i(TAG, "  - P1-2: Optimized cache (4-8x concurrency)")
         VpnLogger.i(TAG, "  - P1-3: ByteBuffer pool")
+        VpnLogger.i(TAG, "  - DoH: DNS over HTTPS (RFC 8484)")
         VpnLogger.i(TAG, "===========================================")
+        VpnLogger.i(TAG, "DoH Server: https://i-dns.wnluo.com/dns-query")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -136,9 +139,15 @@ class DNSVpnService : VpnService() {
                 }
                 return START_STICKY
             }
+            "UPDATE_EDNS" -> {
+                val enabled = intent.getBooleanExtra("enabled", false)
+                ednsDoEnabled = enabled
+                VpnLogger.i(TAG, "Updated EDNS DO setting: $enabled")
+                return START_STICKY
+            }
             "UPDATE_DNS" -> {
-                // 本地DNS处理模式 - 忽略DNS服务器更新请求
-                VpnLogger.i(TAG, "DNS update request ignored (local DNS processing mode)")
+                // DoH模式 - DNS服务器已固定为 i-dns.wnluo.com
+                VpnLogger.i(TAG, "DNS update request ignored (DoH mode with fixed server)")
                 return START_STICKY
             }
         }
@@ -157,8 +166,8 @@ class DNSVpnService : VpnService() {
         VpnLogger.i(TAG, "=== VPN Service onDestroy ===")
         stopVPN()
 
-        // Cleanup connection pool
-        udpConnectionPool.close()
+        // Cleanup DoH client
+        dohClient.shutdown()
 
         // Close VpnLogger last
         VpnLogger.close()
@@ -194,10 +203,10 @@ class DNSVpnService : VpnService() {
 
     private fun startVPN() {
         VpnLogger.i(TAG, "========================================")
-        VpnLogger.i(TAG, "Starting VPN (All DNS Interception Mode)...")
+        VpnLogger.i(TAG, "Starting VPN (DoH Mode)...")
         VpnLogger.i(TAG, "VPN Address: $VPN_ADDRESS")
         VpnLogger.i(TAG, "VPN DNS: $VPN_DNS (virtual, forces all DNS through VPN)")
-        VpnLogger.i(TAG, "Upstream DNS: ${upstreamDNSServers.joinToString(", ")}")
+        VpnLogger.i(TAG, "DoH Server: https://i-dns.wnluo.com/dns-query")
         VpnLogger.i(TAG, "========================================")
 
         if (isRunning.get()) {
@@ -499,8 +508,8 @@ class DNSVpnService : VpnService() {
         } else {
             Log.d(TAG, "Allowing domain: ${dnsQuery.domain}")
 
-            // Forward to DNS server (UDP only)
-            forwardDNSQueryUDP(packet, length, dnsQuery, vpnOutput)
+            // Forward to DoH server (DNS over HTTPS)
+            forwardDNSQueryDoH(packet, length, dnsQuery, vpnOutput)
         }
     }
 
@@ -647,6 +656,12 @@ class DNSVpnService : VpnService() {
         Log.d(TAG, "Loaded filter rules: $stats")
     }
 
+    private fun loadEdnsSetting() {
+        val prefs = getSharedPreferences("vpn_settings", Context.MODE_PRIVATE)
+        ednsDoEnabled = prefs.getBoolean("ednsDoEnabled", false)
+        VpnLogger.i(TAG, "EDNS DO enabled: $ednsDoEnabled")
+    }
+
     private fun saveFilterRules() {
         // Note: Trie filter doesn't provide iteration, so we keep the old storage
         // This is a trade-off for performance. Consider implementing serialization if needed.
@@ -654,7 +669,11 @@ class DNSVpnService : VpnService() {
         prefs.edit().apply()
     }
 
-    private fun forwardDNSQueryUDP(
+    /**
+     * 使用 DoH (DNS over HTTPS) 转发 DNS 查询
+     * 替代传统的 UDP DNS 查询，提供加密传输和更好的隐私保护
+     */
+    private fun forwardDNSQueryDoH(
         originalPacket: ByteArray,
         originalLength: Int,
         dnsQuery: DNSQuery,
@@ -668,7 +687,7 @@ class DNSVpnService : VpnService() {
                 // 1. Check cache first
                 val cachedResponse = dnsCache.get(dnsQuery.domain)
                 if (cachedResponse != null) {
-                    Log.d(TAG, "✓ DNS cache hit for ${dnsQuery.domain}")
+                    VpnLogger.d(TAG, "✓ DNS cache hit for ${dnsQuery.domain}")
 
                     // Extract IP and latency from cache
                     val resolvedIP = parseResolvedIP(cachedResponse) ?: ""
@@ -696,33 +715,24 @@ class DNSVpnService : VpnService() {
                 val ipHeaderLength = (originalPacket[0].toInt() and 0x0F) * 4
                 val udpHeaderStart = ipHeaderLength
                 val dnsStart = udpHeaderStart + 8
-                val dnsQueryData = originalPacket.copyOfRange(dnsStart, originalLength)
+                val rawDnsQueryData = originalPacket.copyOfRange(dnsStart, originalLength)
+                val dnsQueryData = ensureEdnsForDoHQuery(rawDnsQueryData)
 
-                // 3. DNS转发 - 使用上游DNS服务器 (这些服务器的流量通过protect()绕过VPN)
-                var responseData: ByteArray? = null
-                var lastError: Exception? = null
+                // 3. 使用 DoH 查询 (同步阻塞调用)
+                VpnLogger.d(TAG, "Querying DoH server for ${dnsQuery.domain}")
+                val dohResult = dohClient.querySync(dnsQueryData)
 
-                for ((index, server) in upstreamDNSServers.withIndex()) {
-                    try {
-                        VpnLogger.d(TAG, "Trying DNS server $server (attempt ${index + 1}/${upstreamDNSServers.size}) for ${dnsQuery.domain}")
-                        responseData = udpConnectionPool.query(server, dnsQueryData)
-                        val latency = (System.currentTimeMillis() - startTime).toInt()
-                        VpnLogger.i(TAG, "✅ DNS query succeeded using $server in ${latency}ms for ${dnsQuery.domain}")
-                        break  // Success, exit loop
-                    } catch (e: Exception) {
-                        VpnLogger.w(TAG, "DNS server $server failed for ${dnsQuery.domain}: ${e.message}")
-                        lastError = e
-                        // Try next server
-                    }
+                if (!dohResult.success || dohResult.response == null) {
+                    val errorMsg = dohResult.error ?: "Unknown DoH error"
+                    VpnLogger.e(TAG, "❌ DoH query failed for ${dnsQuery.domain}: $errorMsg")
+                    sendDNSEvent(dnsQuery.domain, false, 0, "")
+                    return@execute
                 }
 
-                // If all servers failed, throw the last error
-                if (responseData == null) {
-                    VpnLogger.e(TAG, "❌ All DNS servers failed for ${dnsQuery.domain}", lastError)
-                    throw lastError ?: Exception("All DNS servers failed")
-                }
+                val responseData = dohResult.response
+                val latency = dohResult.latency
 
-                val latency = (System.currentTimeMillis() - startTime).toInt()
+                VpnLogger.i(TAG, "✅ DoH query succeeded for ${dnsQuery.domain} in ${latency}ms")
 
                 // 4. Cache the response (with write lock, extracted TTL)
                 dnsCache.put(dnsQuery.domain, responseData)
@@ -738,20 +748,151 @@ class DNSVpnService : VpnService() {
                     synchronized(vpnOutput) {
                         vpnOutput.write(responseFullPacket)
                     }
-                    Log.d(TAG, "DNS response written to VPN interface for ${dnsQuery.domain}")
+                    VpnLogger.d(TAG, "DNS response written to VPN interface for ${dnsQuery.domain}")
                 }
 
                 // 6. Parse resolved IP and send event with latency and DNS response
                 val resolvedIP = parseResolvedIP(responseData) ?: ""
                 sendDNSEvent(dnsQuery.domain, false, latency, resolvedIP, responseData)
-                Log.d(TAG, "DNS query completed: ${dnsQuery.domain} -> $resolvedIP")
+                VpnLogger.d(TAG, "DNS query completed: ${dnsQuery.domain} -> $resolvedIP")
 
             } catch (e: Exception) {
-                Log.e(TAG, "Error forwarding DNS query for ${dnsQuery.domain}", e)
+                VpnLogger.e(TAG, "Error forwarding DoH query for ${dnsQuery.domain}", e)
                 // Send event marking failure
                 sendDNSEvent(dnsQuery.domain, false, 0, "")
             }
         }
+    }
+
+    private fun ensureEdnsForDoHQuery(query: ByteArray): ByteArray {
+        if (query.size < 12) {
+            return query
+        }
+
+        val qdCount = readU16(query, 4)
+        var offset = 12
+
+        for (i in 0 until qdCount) {
+            val nextOffset = skipDnsName(query, offset)
+            if (nextOffset < 0) {
+                return query
+            }
+            offset = nextOffset + 4
+            if (offset > query.size) {
+                return query
+            }
+        }
+
+        val arCount = readU16(query, 10)
+        var foundOpt = false
+        var tempOffset = offset
+        val updated = query.copyOf()
+
+        for (i in 0 until arCount) {
+            val nameOffset = skipDnsName(updated, tempOffset)
+            if (nameOffset < 0 || nameOffset + 10 > updated.size) {
+                break
+            }
+
+            val type = readU16(updated, nameOffset)
+            val rdLength = readU16(updated, nameOffset + 8)
+
+            if (type == 41) {
+                foundOpt = true
+                writeU16(updated, nameOffset + 2, 1232)
+
+                val ttl = readU32(updated, nameOffset + 4)
+                val extRcode = (ttl ushr 24) and 0xFF
+                val version = (ttl ushr 16) and 0xFF
+                var flags = ttl and 0xFFFF
+                flags = if (ednsDoEnabled) {
+                    flags or 0x8000
+                } else {
+                    flags and 0x7FFF
+                }
+                val newTtl = (extRcode shl 24) or (version shl 16) or flags
+                writeU32(updated, nameOffset + 4, newTtl)
+            }
+
+            tempOffset = nameOffset + 10 + rdLength
+            if (tempOffset > updated.size) {
+                break
+            }
+        }
+
+        if (foundOpt) {
+            return updated
+        }
+
+        val newData = ByteArray(updated.size + 11)
+        System.arraycopy(updated, 0, newData, 0, updated.size)
+        writeU16(newData, 10, arCount + 1)
+
+        var pos = updated.size
+        newData[pos++] = 0x00
+        newData[pos++] = 0x00
+        newData[pos++] = 0x29
+        newData[pos++] = 0x04
+        newData[pos++] = 0xD0
+        newData[pos++] = 0x00
+        newData[pos++] = 0x00
+        val flags = if (ednsDoEnabled) 0x8000 else 0x0000
+        newData[pos++] = ((flags shr 8) and 0xFF).toByte()
+        newData[pos++] = (flags and 0xFF).toByte()
+        newData[pos++] = 0x00
+        newData[pos++] = 0x00
+
+        return newData
+    }
+
+    private fun readU16(data: ByteArray, offset: Int): Int {
+        if (offset + 1 >= data.size) {
+            return 0
+        }
+        return ((data[offset].toInt() and 0xFF) shl 8) or (data[offset + 1].toInt() and 0xFF)
+    }
+
+    private fun readU32(data: ByteArray, offset: Int): Int {
+        if (offset + 3 >= data.size) {
+            return 0
+        }
+        return ((data[offset].toInt() and 0xFF) shl 24) or
+            ((data[offset + 1].toInt() and 0xFF) shl 16) or
+            ((data[offset + 2].toInt() and 0xFF) shl 8) or
+            (data[offset + 3].toInt() and 0xFF)
+    }
+
+    private fun writeU16(data: ByteArray, offset: Int, value: Int) {
+        if (offset + 1 >= data.size) {
+            return
+        }
+        data[offset] = ((value shr 8) and 0xFF).toByte()
+        data[offset + 1] = (value and 0xFF).toByte()
+    }
+
+    private fun writeU32(data: ByteArray, offset: Int, value: Int) {
+        if (offset + 3 >= data.size) {
+            return
+        }
+        data[offset] = ((value shr 24) and 0xFF).toByte()
+        data[offset + 1] = ((value shr 16) and 0xFF).toByte()
+        data[offset + 2] = ((value shr 8) and 0xFF).toByte()
+        data[offset + 3] = (value and 0xFF).toByte()
+    }
+
+    private fun skipDnsName(data: ByteArray, offset: Int): Int {
+        var index = offset
+        while (index < data.size) {
+            val length = data[index].toInt() and 0xFF
+            if (length and 0xC0 == 0xC0) {
+                return index + 2
+            }
+            if (length == 0) {
+                return index + 1
+            }
+            index += 1 + length
+        }
+        return -1
     }
 
     private fun createDNSResponsePacket(
@@ -817,11 +958,18 @@ class DNSVpnService : VpnService() {
         val intent = Intent("com.idns.DNS_EVENT")
         intent.putExtra("domain", domain)
         intent.putExtra("timestamp", System.currentTimeMillis())
-        intent.putExtra("status", if (blocked) "blocked" else "allowed")
+
+        // Check if DoH server blocked this domain (returns special IPs)
+        val isDohBlocked = resolvedIP == "0.0.0.0" || resolvedIP == "::" || resolvedIP == "::0"
+
+        // Status should be "blocked" if either locally blocked OR blocked by DoH server
+        val actualStatus = if (blocked || isDohBlocked) "blocked" else "allowed"
+        intent.putExtra("status", actualStatus)
 
         // Determine display info based on status and resolved IP
         val displayInfo = when {
-            blocked -> "已拦截"
+            blocked -> "已拦截"  // Locally blocked
+            isDohBlocked -> "已拦截"  // DoH server blocking
             resolvedIP.isEmpty() -> {
                 // Check DNS response RCODE to differentiate error types
                 if (dnsResponse != null && dnsResponse.size > 3) {
@@ -835,8 +983,7 @@ class DNSVpnService : VpnService() {
                     "解析失败"
                 }
             }
-            resolvedIP == "0.0.0.0" || resolvedIP == "::" || resolvedIP == "::0" -> "已拦截"  // DoH server blocking
-            else -> resolvedIP
+            else -> resolvedIP  // Normal IP address
         }
         intent.putExtra("category", displayInfo)  // Now stores IP address or status
         intent.putExtra("latency", latency)
@@ -962,9 +1109,12 @@ class DNSVpnService : VpnService() {
 
 /**
  * UDP Connection Pool for DNS queries
- * Reuses a small number of UDP sockets to avoid resource exhaustion
- * CRITICAL: Must protect() sockets to bypass VPN and avoid routing loop
+ * DEPRECATED: No longer used - replaced by DoH (DNS over HTTPS)
+ *
+ * Legacy code kept for reference. UDP DNS queries are replaced by encrypted
+ * HTTPS queries to i-dns.wnluo.com/dns-query
  */
+@Deprecated("Replaced by DNSDoHClient")
 class UDPConnectionPool(private val vpnService: VpnService, private val poolSize: Int = 3) {
     private val TAG = "UDPConnectionPool"
     private val connections = ConcurrentLinkedQueue<DatagramSocket>()
@@ -1066,8 +1216,14 @@ class UDPConnectionPool(private val vpnService: VpnService, private val poolSize
 
 /**
  * DNS Cache to reduce redundant queries
- * Uses LRU eviction policy
+ * DEPRECATED: Replaced by DNSCacheOptimized for better performance
+ *
+ * Legacy simple LRU cache. Use DNSCacheOptimized instead for:
+ * - Read-write locks (4-8x better concurrency)
+ * - Dual-layer hot/cold cache
+ * - Fast expiry checks using nanoTime
  */
+@Deprecated("Replaced by DNSCacheOptimized")
 class DNSCache(maxSize: Int = 200) {
     private val TAG = "DNSCache"
     private val cache = LruCache<String, CacheEntry>(maxSize)

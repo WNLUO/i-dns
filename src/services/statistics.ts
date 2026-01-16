@@ -1,4 +1,4 @@
-import {DnsLog, ChartDataPoint, Statistics, StatisticsCounters} from '../types';
+import {DnsLog, ChartDataPoint, Statistics, StatisticsCounters, BlockRateHistoryPoint} from '../types';
 import * as storage from './storage';
 
 // 计算统计数据
@@ -154,6 +154,46 @@ export const getCategoryBreakdown = (logs: DnsLog[]) => {
   ];
 };
 
+// 生成拦截率历史数据（最近7天）
+export const generateBlockRateHistory = async (): Promise<BlockRateHistoryPoint[]> => {
+  try {
+    const counters = await storage.getStatisticsCounters();
+    const history: BlockRateHistoryPoint[] = [];
+    const today = new Date();
+
+    // 生成最近7天的数据
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(today.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0]; // YYYY-MM-DD
+
+      const dailyStat = counters.dailyStats[dateStr];
+      if (dailyStat && dailyStat.totalRequests > 0) {
+        const blockRate = (dailyStat.blockedRequests / dailyStat.totalRequests) * 100;
+        history.push({
+          date: dateStr,
+          blockRate,
+          totalRequests: dailyStat.totalRequests,
+          blockedRequests: dailyStat.blockedRequests,
+        });
+      } else {
+        // 如果该日期没有数据，填充0
+        history.push({
+          date: dateStr,
+          blockRate: 0,
+          totalRequests: 0,
+          blockedRequests: 0,
+        });
+      }
+    }
+
+    return history;
+  } catch (error) {
+    console.error('Failed to generate block rate history:', error);
+    return [];
+  }
+};
+
 // ===== 基于计数器的统计方法 =====
 
 // 从计数器获取全局统计
@@ -174,6 +214,9 @@ export const getStatisticsFromCounters = async (logs: DnsLog[]): Promise<Statist
     // 图表数据仍然从日志计算（只需要最近24小时）
     const chartData = generateChartData(logs);
 
+    // 生成拦截率历史数据
+    const blockRateHistory = await generateBlockRateHistory();
+
     return {
       totalRequests: counters.totalRequests,
       blockedRequests: counters.blockedRequests,
@@ -187,6 +230,7 @@ export const getStatisticsFromCounters = async (logs: DnsLog[]): Promise<Statist
         unknown: counters.blockedRequests,
       },
       chartData,
+      blockRateHistory,
     };
   } catch (error) {
     console.error('Failed to get statistics from counters:', error);

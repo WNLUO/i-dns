@@ -22,6 +22,7 @@ interface VPNNativeModule {
   addDomainToWhitelist: (domain: string) => Promise<void>;
   removeDomainFromWhitelist: (domain: string) => Promise<void>;
   updateDNSServer: (dnsServer: string) => Promise<void>;
+  setEdnsDoEnabled?: (enabled: boolean) => Promise<void>;
   checkNotificationPermission?: () => Promise<boolean>;
   checkVPNPermission?: () => Promise<boolean>;
 }
@@ -81,7 +82,16 @@ class VPNService {
     try {
       const result = await DNSVPNModule.startVPN();
       console.log('VPN start result:', result);
-      return result;
+
+      if (typeof result === 'boolean') {
+        return { success: result };
+      }
+
+      if (result && typeof result === 'object') {
+        return result;
+      }
+
+      return { success: false };
     } catch (error) {
       console.error('Failed to start VPN:', error);
       throw error;
@@ -192,6 +202,8 @@ class VPNService {
 
   /**
    * 更新 DNS 服务器
+   * @deprecated DoH 模式下 DNS 服务器已固定为 https://i-dns.wnluo.com/dns-query
+   * 此方法保留以保持 API 兼容性，但实际上不会改变 DoH 服务器
    */
   async updateDNSServer(dnsServer: string): Promise<void> {
     if (!this.isAvailable()) {
@@ -200,9 +212,32 @@ class VPNService {
     }
 
     try {
+      // DoH 模式下此调用会被忽略
       await DNSVPNModule.updateDNSServer(dnsServer);
     } catch (error) {
       console.error('Failed to update DNS server:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * 更新 EDNS DO (DNSSEC) 开关
+   */
+  async setEdnsDoEnabled(enabled: boolean): Promise<void> {
+    if (!this.isAvailable()) {
+      console.warn('VPN module not available');
+      return;
+    }
+
+    if (!DNSVPNModule.setEdnsDoEnabled) {
+      console.warn('setEdnsDoEnabled not supported by native module');
+      return;
+    }
+
+    try {
+      await DNSVPNModule.setEdnsDoEnabled(enabled);
+    } catch (error) {
+      console.error('Failed to update EDNS DO setting:', error);
       throw error;
     }
   }

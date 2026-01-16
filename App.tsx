@@ -16,10 +16,10 @@ import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { AppProvider, useApp } from './src/contexts/AppContext';
 import { useThemeColors } from './src/styles/theme';
-import { HomeView } from './src/components/HomeView';
-import { StatsView } from './src/components/StatsView';
-import { LogsView } from './src/components/LogsView';
-import { SettingsView } from './src/components/SettingsView';
+import { HomeView } from './src/components/home/HomeView';
+import { StatsView } from './src/components/stats/StatsView';
+import { LogsView } from './src/components/logs/LogsView';
+import { SettingsView } from './src/components/settings/SettingsView';
 import { UserAgreementView } from './src/components/UserAgreementView';
 import { PrivacyPolicyView } from './src/components/PrivacyPolicyView';
 import { ChildProtectionRulesView } from './src/components/ChildProtectionRulesView';

@@ -2,25 +2,28 @@
 //  DNSForwarder.swift
 //  DNSCore
 //
-//  本地DNS处理 - 不使用外部DNS服务商
-//  DNS查询在本地进行过滤处理，然后通过系统DNS解析
+//  DoH (DNS over HTTPS) 实现 - RFC 8484
+//  使用加密的HTTPS协议查询DNS，提供隐私保护
 //
 
 import Foundation
 import Network
 import os.log
 
-// MARK: - DNS Server (简化版)
+// MARK: - DNS Server
 struct DNSServer {
     enum ServerType {
-        case system    // 使用系统DNS
+        case doh      // DNS over HTTPS
+        case system   // 系统DNS (fallback)
     }
 
     let type: ServerType
+    let url: String?  // DoH URL
     var isHealthy: Bool = true
 
-    init(type: ServerType = .system) {
+    init(type: ServerType = .doh, url: String? = "https://i-dns.wnluo.com/dns-query") {
         self.type = type
+        self.url = url
     }
 }
 
@@ -42,120 +45,105 @@ protocol DNSForwarder {
     func cancel()
 }
 
-// MARK: - System DNS Forwarder
-/// 使用系统DNS进行解析（通过UDP转发到系统配置的DNS服务器）
-class SystemDNSForwarder: DNSForwarder {
+// MARK: - DoH (DNS over HTTPS) Forwarder
+/// 使用HTTPS协议进行DNS查询 (RFC 8484)
+/// 提供加密传输和隐私保护
+class DoHForwarder: DNSForwarder {
 
-    private let logger = OSLog(subsystem: "com.idns.dns", category: "SystemDNSForwarder")
-    private var connection: NWConnection?
-    private var connectionVersion: Int = 0
-    private let connectionLock = NSLock()
+    private let logger = OSLog(subsystem: "com.idns.dns", category: "DoHForwarder")
+    private let dohServerURL: URL
+    private let session: URLSession
 
-    // 系统DNS服务器（从网络配置获取或使用常见公共DNS作为后备）
-    private let systemDNSServers: [String] = ["8.8.8.8", "1.1.1.1", "114.114.114.114"]
-    private var currentServerIndex: Int = 0
+    // DoH 服务器: https://i-dns.wnluo.com/dns-query
+    init(dohURL: String = "https://i-dns.wnluo.com/dns-query") {
+        guard let url = URL(string: dohURL) else {
+            fatalError("Invalid DoH URL: \(dohURL)")
+        }
+        self.dohServerURL = url
 
-    init() {}
+        // Configure URLSession for HTTP/2 and connection reuse
+        let config = URLSessionConfiguration.default
+        config.httpMaximumConnectionsPerHost = 10
+        config.timeoutIntervalForRequest = 5.0
+        config.timeoutIntervalForResource = 10.0
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+
+        self.session = URLSession(configuration: config)
+
+        os_log("DoH Forwarder initialized with URL: %{public}@", log: logger, type: .info, dohURL)
+    }
 
     func forward(query: DNSQuery, completion: @escaping (ForwardResult) -> Void) {
         let startTime = Date()
-        let server = DNSServer(type: .system)
+        let server = DNSServer(type: .doh, url: dohServerURL.absoluteString)
 
-        // 尝试使用系统DNS服务器
-        tryNextServer(query: query, serverIndex: 0, startTime: startTime, completion: completion)
-    }
+        os_log("📤 Sending DoH query for domain: %{public}@", log: logger, type: .debug, query.domain)
 
-    private func tryNextServer(query: DNSQuery, serverIndex: Int, startTime: Date, completion: @escaping (ForwardResult) -> Void) {
-        guard serverIndex < systemDNSServers.count else {
-            let error = NSError(domain: "SystemDNSForwarder", code: -1,
-                              userInfo: [NSLocalizedDescriptionKey: "All DNS servers failed"])
-            let server = DNSServer(type: .system)
-            completion(ForwardResult(response: nil, latency: 0, error: error, server: server))
-            return
-        }
+        // Create HTTP POST request with DNS query data
+        var request = URLRequest(url: dohServerURL)
+        request.httpMethod = "POST"
+        request.httpBody = query.packet
+        request.setValue("application/dns-message", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/dns-message", forHTTPHeaderField: "Accept")
 
-        let serverIP = systemDNSServers[serverIndex]
-
-        let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(serverIP), port: 53)
-        let connection = NWConnection(to: endpoint, using: .udp)
-
-        connection.stateUpdateHandler = { [weak self] state in
+        // Execute DoH request
+        let task = session.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
-            os_log("DNS connection to %{public}@ state: %{public}@",
-                   log: self.logger, type: .debug, serverIP, "\(state)")
-        }
 
-        connection.start(queue: .global(qos: .userInitiated))
+            let latency = Date().timeIntervalSince(startTime)
 
-        // 发送查询
-        connection.send(content: query.packet, completion: .contentProcessed { error in
+            // Check for network errors
             if let error = error {
-                os_log("DNS send to %{public}@ failed: %{public}@",
-                       log: self.logger, type: .error, serverIP, error.localizedDescription)
-                connection.cancel()
-                // 尝试下一个服务器
-                self.tryNextServer(query: query, serverIndex: serverIndex + 1, startTime: startTime, completion: completion)
+                os_log("❌ DoH request failed: %{public}@", log: self.logger, type: .error, error.localizedDescription)
+                completion(ForwardResult(response: nil, latency: latency, error: error, server: server))
                 return
             }
 
-            // 设置超时
-            let timeoutTimer = DispatchSource.makeTimerSource(queue: .global(qos: .userInitiated))
-            timeoutTimer.schedule(deadline: .now() + 5.0)
-            timeoutTimer.setEventHandler {
-                connection.cancel()
-                os_log("DNS query to %{public}@ timed out", log: self.logger, type: .error, serverIP)
-                // 尝试下一个服务器
-                self.tryNextServer(query: query, serverIndex: serverIndex + 1, startTime: startTime, completion: completion)
-            }
-            timeoutTimer.resume()
-
-            // 接收响应
-            connection.receiveMessage { data, _, isComplete, error in
-                timeoutTimer.cancel()
-                let latency = Date().timeIntervalSince(startTime)
-
-                connection.cancel()
-
-                if let error = error {
-                    os_log("DNS receive from %{public}@ failed: %{public}@",
-                           log: self.logger, type: .error, serverIP, error.localizedDescription)
-                    // 尝试下一个服务器
-                    self.tryNextServer(query: query, serverIndex: serverIndex + 1, startTime: startTime, completion: completion)
+            // Check HTTP status code
+            if let httpResponse = response as? HTTPURLResponse {
+                if httpResponse.statusCode != 200 {
+                    let error = NSError(
+                        domain: "DoHForwarder",
+                        code: httpResponse.statusCode,
+                        userInfo: [NSLocalizedDescriptionKey: "DoH server returned HTTP \(httpResponse.statusCode)"]
+                    )
+                    os_log("❌ DoH HTTP error: %d", log: self.logger, type: .error, httpResponse.statusCode)
+                    completion(ForwardResult(response: nil, latency: latency, error: error, server: server))
                     return
                 }
-
-                guard let data = data, !data.isEmpty else {
-                    os_log("DNS query to %{public}@ returned empty response",
-                           log: self.logger, type: .error, serverIP)
-                    // 尝试下一个服务器
-                    self.tryNextServer(query: query, serverIndex: serverIndex + 1, startTime: startTime, completion: completion)
-                    return
-                }
-
-                os_log("DNS query to %{public}@ succeeded in %.0fms",
-                       log: self.logger, type: .debug, serverIP, latency * 1000)
-
-                let server = DNSServer(type: .system)
-                completion(ForwardResult(response: data, latency: latency, error: nil, server: server))
             }
-        })
+
+            // Check response data
+            guard let data = data, !data.isEmpty else {
+                let error = NSError(
+                    domain: "DoHForwarder",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "DoH server returned empty response"]
+                )
+                os_log("❌ Empty DoH response", log: self.logger, type: .error)
+                completion(ForwardResult(response: nil, latency: latency, error: error, server: server))
+                return
+            }
+
+            os_log("✅ DoH query succeeded in %.0fms (response: %d bytes)",
+                   log: self.logger, type: .info, latency * 1000, data.count)
+
+            completion(ForwardResult(response: data, latency: latency, error: nil, server: server))
+        }
+
+        task.resume()
     }
 
     func cancel() {
-        connectionLock.lock()
-        defer { connectionLock.unlock() }
-
-        connection?.cancel()
-        connection = nil
-        connectionVersion += 1
+        session.invalidateAndCancel()
     }
 }
 
-// MARK: - DNS Forwarder Manager (简化版)
+// MARK: - DNS Forwarder Manager
 class DNSForwarderManager {
 
     private let logger = OSLog(subsystem: "com.idns.dns", category: "ForwarderManager")
-    private let systemForwarder: SystemDNSForwarder
+    private let dohForwarder: DoHForwarder
     private let lock = NSLock()
 
     // 统计
@@ -163,12 +151,14 @@ class DNSForwarderManager {
     private var failureCount: Int = 0
 
     init(servers: [DNSServer] = []) {
-        self.systemForwarder = SystemDNSForwarder()
+        // Initialize with DoH forwarder
+        self.dohForwarder = DoHForwarder(dohURL: "https://i-dns.wnluo.com/dns-query")
+        os_log("DNS Forwarder Manager initialized with DoH", log: logger, type: .info)
     }
 
     func forward(query: DNSQuery, completion: @escaping (ForwardResult) -> Void) {
-        // 直接使用系统DNS转发
-        systemForwarder.forward(query: query) { [weak self] result in
+        // 使用 DoH 转发所有查询
+        dohForwarder.forward(query: query) { [weak self] result in
             guard let self = self else { return }
 
             self.lock.lock()
@@ -184,11 +174,12 @@ class DNSForwarderManager {
     }
 
     func cancel() {
-        systemForwarder.cancel()
+        dohForwarder.cancel()
     }
 
     func updateServers(_ servers: [DNSServer]) {
-        // 本地DNS处理模式 - 不需要更新服务器
+        // DoH 模式 - DNS服务器已固定为 i-dns.wnluo.com
+        os_log("DNS update request ignored (DoH mode with fixed server)", log: logger, type: .info)
     }
 
     func getStatistics() -> [String: Any] {
@@ -198,7 +189,8 @@ class DNSForwarderManager {
         return [
             "successCount": successCount,
             "failureCount": failureCount,
-            "mode": "local"
+            "mode": "doh",
+            "server": "https://i-dns.wnluo.com/dns-query"
         ]
     }
 }

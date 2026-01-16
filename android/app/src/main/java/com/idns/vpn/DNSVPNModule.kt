@@ -217,6 +217,25 @@ class DNSVPNModule(reactContext: ReactApplicationContext) : ReactContextBaseJava
     }
 
     @ReactMethod
+    fun setEdnsDoEnabled(enabled: Boolean, promise: Promise) {
+        try {
+            val prefs = reactApplicationContext.getSharedPreferences("vpn_settings", Context.MODE_PRIVATE)
+            prefs.edit().putBoolean("ednsDoEnabled", enabled).apply()
+
+            if (DNSVpnService.isRunning.get()) {
+                val serviceIntent = Intent(reactApplicationContext, DNSVpnService::class.java)
+                serviceIntent.action = "UPDATE_EDNS"
+                serviceIntent.putExtra("enabled", enabled)
+                reactApplicationContext.startService(serviceIntent)
+            }
+
+            promise.resolve(null)
+        } catch (e: Exception) {
+            promise.reject("VPN_SETTINGS_ERROR", "Failed to update EDNS DO setting: ${e.message}", e)
+        }
+    }
+
+    @ReactMethod
     fun checkNotificationPermission(promise: Promise) {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

@@ -1,7 +1,11 @@
 import { LogRetentionPeriod } from '../types';
 
-// 本地DNS处理模式 - 不使用任何外部DNS服务商
-// 所有DNS查询都在本地进行过滤处理，然后通过系统DNS解析
+// DoH (DNS over HTTPS) 模式
+// 使用加密的 HTTPS 协议连接到 i-dns.wnluo.com 进行 DNS 查询
+// 提供隐私保护、防止 DNS 劫持、智能过滤等功能
+
+// DoH 服务器配置
+export const DOH_SERVER_URL = 'https://i-dns.wnluo.com/dns-query';
 
 // 日志保留时间选项配置
 export const LOG_RETENTION_OPTIONS: Array<{
